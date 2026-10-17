@@ -1,0 +1,28 @@
+[project]
+name = "tooldistill"
+version = "0.1.0"
+description = "Turn an agent's trial-and-error runs into verified, reusable distilled tools, and keep them working as the base tools underneath them change."
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [{ name = "Irtaza Kashif", email = "irtaza.kashif@gmail.com" }]
+dependencies = [
+    "anthropic>=1.0",
+    "typer>=0.15",
+    "jsonschema>=4.23",
+]
+
+[project.optional-dependencies]
+plugin = ["mcp>=1.0"]
+
+[project.scripts]
+tooldistill = "tooldistill.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
