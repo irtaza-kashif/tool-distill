@@ -32,3 +32,41 @@ class InvalidTransition(ToolDistillError):
         self.version = version
         self.from_status = from_status
         self.to_status = to_status
+
+
+class ToolLoadError(ToolDistillError):
+    """A distilled tool file could not be loaded into a runnable tool."""
+
+
+class DistilledToolCallError(ToolDistillError):
+    """An inner base tool call made through ``call()`` failed (executor raised, or unknown base tool)."""
+
+    def __init__(self, step: int, base_tool: str, message: str) -> None:
+        super().__init__(f"step {step}: call to '{base_tool}' failed: {message}")
+        self.step = step
+        self.base_tool = base_tool
+        self.message = message
+
+
+class ReplayMismatchError(ToolDistillError):
+    """In replay mode, a ``call()`` matched no recorded fixture."""
+
+    def __init__(
+        self,
+        step: int,
+        base_tool: str,
+        input_json: str,
+        message: str,
+        *,
+        nearest_input_json: str | None,
+        nearest_seq: int | None,
+        tool_has_fixtures: bool,
+    ) -> None:
+        super().__init__(message)
+        self.step = step
+        self.base_tool = base_tool
+        self.input_json = input_json
+        self.message = message
+        self.nearest_input_json = nearest_input_json
+        self.nearest_seq = nearest_seq
+        self.tool_has_fixtures = tool_has_fixtures
