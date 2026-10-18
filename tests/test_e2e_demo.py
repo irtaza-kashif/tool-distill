@@ -419,7 +419,7 @@ def test_demo_script_with_a_stale_tool_list(store, world):
     assert report.distilled_calls == 1 and report.distilled_failures == 1 and report.inner_calls == 2
     assert report.base_calls == 3 and report.propose_calls == 1 and report.nudged
     assert report.steps[0] == (TOOL_NAME, True) and report.steps[-1] == ("propose_distilled_tool", False)
-    assert memory["verdict"] == "verified: 2 base tool calls vs baseline 11"
+    assert memory["verdict"] == "verified: 2 base tool calls vs baseline 11; the run spent 7,150 model tokens, the tool spends none"
     assert world.task_succeeded(world.task_for("Initech")) and memory["invoice"]["currency"] == "USD"
 
     assert [(e.to_status, e.reason) for e in registry.list_status_events(TOOL_NAME, 2)] == [
