@@ -303,3 +303,27 @@ def test_unhealthy_or_failing_probe_adds_no_note(registry, tools):
     second = add_version(registry, GOOD, fixtures=acme_fixtures(), avoided=avoided)
     assert verify(registry, tools, second, Settings(), health_probe=lambda name: False).notes == []
     assert verify(registry, tools, second, Settings()).notes == []
+
+
+def test_replay_failure_names_the_calls_that_ran_live(registry, tools):
+    """With live verification on, a call with the wrong arguments silently runs live and later steps diverge;
+    the message must point at the first unmatched call, not only at the step that finally failed."""
+    from helpers import acme_executor
+
+    seen: list[str] = []
+
+    def executor(name, args):
+        seen.append(name)
+        if name == "billing_find_customer":
+            raise RuntimeError("customer service unavailable")
+        return acme_executor(name, args)
+
+    code = GOOD.replace("from:{customer} order", "from:{customer} orders")  # not what the run sent
+    assert 'name=customer)' in code
+    code = code.replace("name=customer)", 'name=f"{customer} Inc")')  # neither is this, so it runs live too
+    version = add_version(registry, code, fixtures=acme_fixtures())
+    report = verify(registry, tools, version, Settings(), executor=executor, allow_live=True)
+    assert not report.passed and report.failed_check is CheckName.REPLAY
+    assert report.message.startswith("step 3: call to 'billing_find_customer' failed: customer service unavailable")
+    assert "1 call(s) matched no recorded fixture and ran live: step 1 gmail_search(" in report.message
+    assert '"query":"from:ACME orders"' in report.message and seen == ["gmail_search", "billing_find_customer"]

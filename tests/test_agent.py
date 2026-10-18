@@ -260,8 +260,13 @@ def test_worth_distilling_matrix(td):
     assert not trace.worth_distilling()  # 3 < min_calls_to_distill
     trace.execute("gmail_search", {"query": "x"})
     assert trace.worth_distilling()
-    trace.execute(PROPOSE_TOOL_NAME, {**PROPOSAL_PAYLOAD, "code": GOOD_INVOICE.replace('"billing_find_customer"', '"billing_find_customr"')})
-    assert trace.worth_distilling() is False  # a draft exists for this trace, even though it failed static
+    out = trace.execute(PROPOSE_TOOL_NAME, {**PROPOSAL_PAYLOAD, "code": GOOD_INVOICE.replace('"billing_find_customer"', '"billing_find_customr"')})
+    assert out.is_error and trace.worth_distilling()  # a rejected draft is not a proposal in hand
+    nudge = trace.distill_nudge()
+    assert nudge is not None and nudge.startswith(f"Your proposal in this run was rejected: {out.content}")
+    assert "Fix the module and call `propose_distilled_tool` once more." in nudge
+    again = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)  # this trace's fixtures cannot replay the invoice path
+    assert again.is_error and again.content.startswith("rejected (replay)") and trace.worth_distilling()
 
 
 def test_record_usage_accepts_objects_and_dicts(td):

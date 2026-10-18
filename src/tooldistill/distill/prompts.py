@@ -178,10 +178,12 @@ def nudge(
     tool_names: Sequence[str],
     failed_tool: str | None = None,
     distilled_tools: Sequence[str] = (),
+    rejected: str | None = None,
 ) -> str:
     """The message that asks the agent to propose a distilled tool for the run it just completed.
 
     ``distilled_tools`` names the distilled tools that are already exposed, so the agent is told not to duplicate one.
+    ``rejected`` is the verdict of a proposal already made in this run that was rejected: the nudge asks for a fix.
     """
     if failed_tool:
         opening = (
@@ -194,6 +196,11 @@ def nudge(
             f"This run succeeded and took {base_calls} base tool calls. Call `{PROPOSE_TOOL_NAME}` once, now, to "
             "save the sequence of base tool calls that solved the task, without its dead ends, as a reusable "
             "distilled tool."
+        )
+    if rejected:
+        opening = (
+            f"Your proposal in this run was rejected: {rejected}\n\nFix the module and call `{PROPOSE_TOOL_NAME}` "
+            "once more. " + opening
         )
     lines = [
         opening,

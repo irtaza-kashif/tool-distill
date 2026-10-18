@@ -448,8 +448,8 @@ class Trace:
         if self._outcome is not True:
             return False
         registry = self._td.registry
-        if registry.versions_from_trace(self.id):
-            return False
+        if any(not _rejected_draft(v) for v in registry.versions_from_trace(self.id)):
+            return False  # a proposal that got past validation and was not rejected is in hand
         stats = registry.run_stats_for_trace(self.id)
         if any(not stat.success for stat in stats):
             return True
@@ -469,7 +469,15 @@ class Trace:
             tool_names=self._td.tools.names,
             failed_tool=self.failed_distilled_tool(),
             distilled_tools=[tool["name"] for tool in self._td.active_tools()],
+            rejected=self._last_rejection(),
         )
+
+    def _last_rejection(self) -> str | None:
+        """The verdict of the last rejected proposal in this trace, so the nudge can ask for a fixed one."""
+        for call in reversed(self._td.registry.list_tool_calls(self.id)):
+            if call.kind is CallKind.PROPOSE:
+                return call.error if call.is_error else None
+        return None
 
     def finish(self) -> IngestResult | None:
         """Close the trace. Runs the fallback Distiller when the run is worth distilling and nobody proposed."""
@@ -493,3 +501,8 @@ class Trace:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _rejected_draft(version: VersionRecord) -> bool:
+    """A draft that failed a check (or validation) is not a proposal in hand: the run may still be nudged."""
+    return version.status is Status.DRAFT and (version.status_reason or "").endswith("_failed")

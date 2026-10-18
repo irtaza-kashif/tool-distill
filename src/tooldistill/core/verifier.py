@@ -139,6 +139,15 @@ def verify(
             message = f"{failure.message} after step {failure.step}"
         else:
             message = failure.message
+        unmatched = [c for c in outcome.calls if c.source == "live" and c.step < failure.step]
+        if unmatched and not full_live:
+            listed = ", ".join(f"step {c.step} {c.base_tool}({c.input_json[:160]})" for c in unmatched[:3])
+            more = f" and {len(unmatched) - 3} more" if len(unmatched) > 3 else ""
+            message += (
+                f". Before that, {len(unmatched)} call(s) matched no recorded fixture and ran live: {listed}{more}. "
+                "A call must use exactly the arguments the source run used, or the state it created diverges"
+            )
+            extra["unmatched_steps"] = [c.step for c in unmatched]
         return _fail(registry, version, report, CheckName.REPLAY, message, **extra)
     measured = outcome.measured_calls
     if full_live:
