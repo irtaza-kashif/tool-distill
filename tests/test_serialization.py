@@ -114,3 +114,10 @@ def test_new_trace_id_is_hex_and_time_ordered():
     stamps = [i[:12] for i in ids]  # the millisecond timestamp prefix never goes backwards
     assert stamps == sorted(stamps)
     assert ids[0][12] == "7"  # version nibble of the UUIDv7 layout
+
+
+def test_new_trace_ids_are_strictly_increasing_within_a_millisecond():
+    from tooldistill.core.serialization import new_trace_id
+
+    ids = [new_trace_id() for _ in range(2000)]  # far more than one millisecond can hold without the counter
+    assert ids == sorted(ids) and len(set(ids)) == len(ids)

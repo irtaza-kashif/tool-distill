@@ -177,6 +177,7 @@ def ingest(
     baseline_latency = measured.baseline_latency_ms
     previous = registry.latest_version(proposal.name)
     active_before = registry.active_version(proposal.name)  # a proposal under an active tool's name replaces it
+    live_before = [v.version for v in registry.list_versions(proposal.name) if v.status in (Status.ACTIVE, Status.SUSPECT)]
     if previous is not None:
         # A fallback run after a structured error is far cheaper than the original discovery.
         baseline_calls = max(baseline_calls, previous.baseline_calls or 0)
@@ -217,11 +218,17 @@ def ingest(
     if rebuild_of is not None and report.passed:
         registry.resolve_rebuild(rebuild_of.id)
     verdict = report.verdict
-    if report.passed and active_before is not None and active_before.version != final.version:
+    if report.passed:
+        # Always say what became of the version: the proposer must not have to guess whether it can be used.
+        superseded = [n for n in live_before if n != final.version]
         if final.status is Status.ACTIVE:
-            verdict += f"; v{final.version} is now active and replaces v{active_before.version}"
-        else:
-            verdict += f"; v{final.version} waits for promotion while v{active_before.version} stays active"
+            verdict += f"; v{final.version} is now active"
+            if superseded:
+                verdict += " and replaces " + ", ".join(f"v{n}" for n in superseded)
+        elif final.status is Status.VERIFIED:
+            verdict += f"; v{final.version} waits for promotion"
+            if active_before is not None:
+                verdict += f" while v{active_before.version} stays active"
     return IngestResult(accepted=True, verdict=verdict, version=final, report=report)
 
 

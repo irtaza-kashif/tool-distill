@@ -3,6 +3,7 @@
 import hashlib
 import json
 import secrets
+import threading
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -48,15 +49,26 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
-def new_trace_id() -> str:
-    """A 32-character hex id in the UUIDv7 layout: a millisecond timestamp first, then random bits.
+_ID_LOCK = threading.Lock()
+_ID_STATE = [0, 0]  # millisecond, counter
 
-    Ids therefore sort by creation time. ``uuid.uuid7()`` would do the same but exists only from Python 3.14.
+
+def new_trace_id() -> str:
+    """A 32-character hex id in the UUIDv7 layout: a millisecond timestamp first, then a counter, then random bits.
+
+    Ids therefore sort by creation time, and two ids made in the same millisecond keep their order (the counter
+    grows). ``uuid.uuid7()`` would do the same but exists only from Python 3.14.
     """
-    millis = time.time_ns() // 1_000_000
-    rand_a = secrets.randbits(12)
-    rand_b = secrets.randbits(62)
-    value = (millis << 80) | (0x7 << 76) | (rand_a << 64) | (0b10 << 62) | rand_b
+    with _ID_LOCK:
+        millis = time.time_ns() // 1_000_000
+        if millis > _ID_STATE[0]:
+            _ID_STATE[0], _ID_STATE[1] = millis, secrets.randbits(11)  # fresh millisecond: random start, headroom above
+        else:
+            _ID_STATE[1] += 1  # same (or earlier, after a clock step) millisecond: strictly after the previous id
+            if _ID_STATE[1] >= 1 << 12:
+                _ID_STATE[0], _ID_STATE[1] = _ID_STATE[0] + 1, 0
+        millis, counter = _ID_STATE
+    value = (millis << 80) | (0x7 << 76) | (counter << 64) | (0b10 << 62) | secrets.randbits(62)
     return f"{value:032x}"
 
 

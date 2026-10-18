@@ -217,7 +217,7 @@ def test_propose_flow_through_the_trace(td):
     assert td.registry.get_trace(trace.id).nudged
 
     out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)
-    assert not out.is_error and out.content == "verified: 4 base tool calls vs baseline 8"
+    assert not out.is_error and out.content == "verified: 4 base tool calls vs baseline 8; v1 waits for promotion"
     row = td.registry.list_tool_calls(trace.id)[-1]
     assert row.kind is CallKind.PROPOSE and not row.is_error and row.input["_source"] == "agent"
     assert td.registry.get_version(NAME, 1).status is Status.VERIFIED
@@ -285,7 +285,7 @@ def test_finish_runs_the_fallback_distiller(store):
     run_discovery(trace)
     trace.set_outcome(True)
     result = trace.finish()
-    assert result is not None and result.verified and result.verdict == "verified: 4 base tool calls vs baseline 8"
+    assert result is not None and result.verified and result.verdict == "verified: 4 base tool calls vs baseline 8; v1 waits for promotion"
     assert fake.calls == [{"trace_id": trace.id, "tools": td.tools.names, "note": None, "name": None}]
     row = td.registry.list_tool_calls(trace.id)[-1]
     assert row.kind is CallKind.PROPOSE and row.input["_source"] == "distiller" and not row.is_error
@@ -411,4 +411,4 @@ def test_verdict_reports_tokens_when_the_run_recorded_them(td):
     trace.record_usage({"input_tokens": 12000, "output_tokens": 529})
     trace.set_outcome(True)
     out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)
-    assert out.content == "verified: 4 base tool calls vs baseline 8; the run spent 12,529 model tokens, the tool spends none"
+    assert out.content == "verified: 4 base tool calls vs baseline 8; the run spent 12,529 model tokens, the tool spends none; v1 waits for promotion"

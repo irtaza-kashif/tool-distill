@@ -227,7 +227,7 @@ def test_rebuild_flow(registry, tools):
 
     shorter = FakeDistiller(Proposal(NAME, "Import the latest order email.", TWO_CALL_SCHEMA, TWO_CALL_TOOL, {"customer": "ACME"}))
     result = rebuild(registry, tools, settings, NAME, distiller=shorter, executor=acme_executor)
-    assert result.rebuilt and result.message == f"rebuilt '{NAME}' as v3: verified: 2 base tool calls vs baseline 31"
+    assert result.rebuilt and result.message == f"rebuilt '{NAME}' as v3: verified: 2 base tool calls vs baseline 31; v3 is now active and replaces v1"
     assert result.result is not None and result.result.report is not None and result.result.report.used_live
     assert registry.list_rebuild_queue() == []
     assert (registry.get_version(NAME, 3).status, registry.get_version(NAME, 3).measured_calls) == (Status.ACTIVE, 2)

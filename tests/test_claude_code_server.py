@@ -107,7 +107,7 @@ async def test_propose_and_run_through_the_server(store: Path):
     context = FakeContext()
     result = await server.call_tool(PROPOSE_TOOL_NAME, {**PROPOSAL, "trace_id": "sess-a", "task": "Invoice ACME"}, context)
     assert not result.is_error, text_of(result)
-    assert text_of(result) == "verified: 4 base tool calls vs baseline 8"
+    assert text_of(result) == "verified: 4 base tool calls vs baseline 8; v1 is now active"
     assert td.registry.get_trace("sess-a").outcome is True and td.registry.get_trace("sess-a").task == "Invoice ACME"
     assert context.session.notifications == 1 and context.notified == 1  # the exposed set changed
 
@@ -280,7 +280,7 @@ def create_invoice_from_email(customer: str) -> dict:
     proposal = {"name": tool, "description": "Create a draft invoice for a customer from their most recent order email.", "input_schema": {"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]}, "code": code, "test_inputs": {"customer": "ACME"}, "trace_id": "sess-A", "task": "Create a draft invoice for ACME"}
     context = FakeContext()
     result = await server.call_tool(PROPOSE_TOOL_NAME, proposal, context)
-    assert text_of(result) == "verified: 4 base tool calls vs baseline 7", text_of(result)
+    assert text_of(result) == "verified: 4 base tool calls vs baseline 7; v1 is now active", text_of(result)
     assert td.registry.get_version(tool, 1).status is Status.ACTIVE
     assert [a.base_tool for a in td.registry.list_avoided_tools(tool, 1)] == ["invoice__billing_import_from_email"]
     assert context.session.notifications == 1
@@ -319,7 +319,7 @@ def create_invoice_from_email(customer: str) -> dict:
     return call("invoice__billing_import_from_email", message_id=messages[0]["id"], currency="USD")
 '''
     result = await server.call_tool(PROPOSE_TOOL_NAME, {**proposal, "code": v2_code, "trace_id": "sess-C", "task": "Create a draft invoice for Initech"}, context)
-    assert text_of(result) == "verified: 2 base tool calls vs baseline 7", text_of(result)
+    assert text_of(result) == "verified: 2 base tool calls vs baseline 7; v2 is now active and replaces v1", text_of(result)
     assert td.registry.get_version(tool, 2).status is Status.ACTIVE
     assert td.registry.get_version(tool, 1).status_reason == "superseded_by_v2"
     assert [t.name for t in await server.list_tools()] == [PROPOSE_TOOL_NAME, tool]
