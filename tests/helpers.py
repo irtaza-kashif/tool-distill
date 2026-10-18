@@ -83,6 +83,31 @@ INVOICE_SCHEMA: dict[str, Any] = {
 GOOD_INVOICE = (TOOLS_DIR / "good_invoice.py").read_text(encoding="utf-8")
 GOOD_WITH_CHECK = (TOOLS_DIR / "good_with_check.py").read_text(encoding="utf-8")
 LINES = [{"sku": "A", "qty": 2}]
+TWO_CALL_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]}
+TWO_CALL_TOOL = '''from tooldistill import distilled_tool, call
+
+
+@distilled_tool(
+    name="create_invoice_from_email",
+    description="Import the latest order email as an invoice.",
+    input_schema={"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]},
+)
+def create_invoice_from_email(customer: str) -> dict:
+    msg = call("gmail_search", query=f"from:{customer} order", since="1d")[0]
+    return call("billing_import_from_email", message_id=msg["id"])
+'''
+
+
+class FakeDistiller:
+    """A Distiller that returns a fixed proposal (or None) and records how it was called."""
+
+    def __init__(self, proposal: Any) -> None:
+        self.proposal = proposal
+        self.calls: list[dict[str, Any]] = []
+
+    def distill(self, trace: Any, tools: Any, *, note: str | None = None, name: str | None = None) -> Any:
+        self.calls.append({"trace_id": trace.trace.id, "tools": tools.names, "note": note, "name": name})
+        return self.proposal
 
 
 def acme_fixtures(*, with_since: bool = True) -> list[tuple[str, str, str]]:

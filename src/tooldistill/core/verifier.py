@@ -21,7 +21,7 @@ from tooldistill.core.serialization import canonical_json, code_hash
 from tooldistill.core.static_check import static_check
 from tooldistill.core.tools import ToolSet
 
-__all__ = ["HealthProbe", "VerifyReport", "verify"]
+__all__ = ["HealthProbe", "VerifyReport", "probe_healthy", "verify"]
 
 HealthProbe = Callable[[str], bool]
 
@@ -209,11 +209,15 @@ def verify(
     return report
 
 
-def _probe(health_probe: HealthProbe, base_tool: str) -> bool:
+def probe_healthy(health_probe: HealthProbe, base_tool: str) -> bool:
+    """Ask the developer's probe whether a base tool is reachable; a probe that raises counts as unhealthy."""
     try:
         return bool(health_probe(base_tool))
     except Exception:
         return False
+
+
+_probe = probe_healthy
 
 
 def _record(registry: Registry, version: VersionRecord, check: CheckName, passed: bool, message: str, **extra: Any) -> None:

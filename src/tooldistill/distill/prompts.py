@@ -7,7 +7,7 @@ from typing import Any
 from tooldistill.core.proposals import PROPOSE_TOOL_INPUT_SCHEMA
 from tooldistill.core.tools import PROPOSE_TOOL_NAME
 
-__all__ = ["FILE_FORMAT_RULES", "PROPOSE_TOOL_DESCRIPTION", "nudge", "propose_tool"]
+__all__ = ["FILE_FORMAT_RULES", "NAMING_GUIDANCE", "PROPOSE_TOOL_DESCRIPTION", "nudge", "propose_tool"]
 
 FILE_FORMAT_RULES = '''A distilled tool is one Python module. Example:
 
@@ -42,11 +42,21 @@ Rules (a static check enforces them before anything runs; a broken rule is repor
 - The tool returns a JSON-serializable value. The optional check(result) must not call base tools.
 - Do not put status, version, baseline or dependency information in the file: the library measures those itself and ignores any claims.'''
 
+NAMING_GUIDANCE = (
+    "Name the tool after the kind of task it does, never after this run's particular inputs: a run that invoiced "
+    "ACME yields `create_invoice_from_order_email` with a `customer` parameter, not `invoice_acme`. Parameterize what "
+    "varies between similar tasks (the customer, the date range, ...) and hard-code nothing that was specific to "
+    "this run."
+)
+
 PROPOSE_TOOL_DESCRIPTION = (
     "Save the minimal sequence of tool calls that solved this task as a reusable tool. It will be verified "
     "before it can be used. Call it once the task is done: the module is checked statically, replayed against this run's recorded tool "
     "responses with your test_inputs, and must use clearly fewer base tool calls than this run did. "
-    "The result tells you the verdict; fix the module and call again if it is rejected.\n\n" + FILE_FORMAT_RULES
+    "The result tells you the verdict; fix the module and call again if it is rejected.\n\n"
+    + NAMING_GUIDANCE
+    + "\n\n"
+    + FILE_FORMAT_RULES
 )
 
 
@@ -83,6 +93,8 @@ def nudge(task: str, *, base_calls: int, tool_names: Sequence[str], failed_tool:
             "that reproduce exactly this run. Verification replays the module against this run's recorded tool "
             "responses, so include only the calls that were needed, with exactly the arguments this run used, and "
             "skip dead ends and failed calls.",
+            "",
+            NAMING_GUIDANCE,
             "",
             FILE_FORMAT_RULES,
             "",

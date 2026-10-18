@@ -8,12 +8,14 @@ from typing import Any
 import pytest
 import tools as invoice
 from agent_loop import run_agent
+from helpers import FakeDistiller
 
 from tooldistill import ToolDistill
-from tooldistill.core.models import CallKind, Status
+from tooldistill.core.models import REASON_AVOIDED_TOOL_RECOVERED, CallKind, Proposal, Status
 
 TOOL_NAME = "create_invoice_from_email"
 SWITCHES = ("import_outage", "schema_currency", "tools_updated")
+TOOL_SCHEMA = {"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]}
 
 PROPOSED_V1 = '''from tooldistill import distilled_tool, call
 
@@ -33,13 +35,31 @@ def create_invoice_from_email(customer: str) -> dict:
 def check(result: dict) -> bool:
     return result.get("status") == "draft"
 '''
-PROPOSED_V2 = PROPOSED_V1.replace('lines=order["lines"])', 'lines=order["lines"], currency="USD")').replace(
-    'description="Create a draft invoice for a customer from their most recent order email."',
-    'description="Create a draft invoice (in USD) for a customer from their most recent order email."',
+REBUILT_V2 = '''from tooldistill import distilled_tool, call
+
+
+@distilled_tool(
+    name="create_invoice_from_email",
+    description="Import a customer's most recent order email as a draft invoice.",
+    input_schema={"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]},
 )
-STRUCTURED_ERROR_V1 = (
-    "Distilled tool 'create_invoice_from_email' (v1) failed at step 4 of 4.\n"
-    "Base tool: billing_create_invoice\n"
+def create_invoice_from_email(customer: str) -> dict:
+    messages = call("gmail_search", query=f"from:{customer} order", since="7d")
+    return call("billing_import_from_email", message_id=messages[0]["id"])
+
+
+def check(result: dict) -> bool:
+    return result.get("status") == "draft"
+'''
+PROPOSED_V3 = REBUILT_V2.replace('message_id=messages[0]["id"])', 'message_id=messages[0]["id"], currency="USD")').replace(
+    "Import a customer's most recent order email as a draft invoice.",
+    "Import a customer's most recent order email as a draft invoice in USD.",
+)
+UPDATED_DEFINITIONS_V2 = PROPOSED_V1.replace('lines=order["lines"])', 'lines=order["lines"], currency="USD")')
+
+STRUCTURED_ERROR_V2 = (
+    "Distilled tool 'create_invoice_from_email' (v2) failed at step 2 of 2.\n"
+    "Base tool: billing_import_from_email\n"
     "Error: missing required property 'currency'\n"
     "This distilled tool has been disabled. Complete the task using the base tools directly."
 )
@@ -87,6 +107,10 @@ def result_json(messages: list[dict[str, Any]], index: int = 0) -> Any:
     return json.loads(block["content"])
 
 
+def propose(payload: dict[str, Any]) -> Response:
+    return Response([tool_use("propose_distilled_tool", payload)])
+
+
 class ScriptedModel:
     """Stands in for anthropic.Anthropic(): messages.create pops the next scripted turn."""
 
@@ -110,7 +134,7 @@ class ScriptedModel:
 
 
 def discovery_script(customer: str, memory: dict[str, Any]) -> list[Any]:
-    """Demo step 1: ~11 base tool calls of trial and error, then a proposal when nudged."""
+    """Demo step 1: 11 base tool calls of trial and error (two of them the broken shortcut), then a proposal."""
 
     def get_message(messages):
         memory["message_id"] = result_json(messages)[0]["id"]
@@ -145,20 +169,19 @@ def discovery_script(customer: str, memory: dict[str, Any]) -> list[Any]:
         return Response([tool_use("billing_create_invoice", {"customer_id": memory["customer"]["id"], "lines": memory["order"]["lines"]})])
 
     def finish(messages):
-        created = result_json(messages)
-        memory["invoice"] = created
-        return end_turn(f"Created draft invoice {created['id']} for {customer}.")
+        memory["invoice"] = result_json(messages)
+        return end_turn(f"Created draft invoice {memory['invoice']['id']} for {customer}.")
 
-    def propose(messages):
+    def propose_v1(messages):
         nudge = last_user_text(messages)
         assert nudge.startswith("This run succeeded and took 11 base tool calls. Call `propose_distilled_tool` once, now")
-        return Response([tool_use("propose_distilled_tool", {
+        return propose({
             "name": TOOL_NAME,
             "description": "Create a draft invoice for a customer from their most recent order email.",
-            "input_schema": {"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]},
+            "input_schema": TOOL_SCHEMA,
             "code": PROPOSED_V1,
             "test_inputs": {"customer": customer},
-        })])
+        })
 
     def after_verdict(messages):
         verdict = last_results(messages)[0]
@@ -178,7 +201,7 @@ def discovery_script(customer: str, memory: dict[str, Any]) -> list[Any]:
         distractors,
         create_invoice,
         finish,
-        propose,
+        propose_v1,
         after_verdict,
     ]
 
@@ -194,45 +217,37 @@ def reuse_script(customer: str, memory: dict[str, Any]) -> list[Any]:
 
 
 def fallback_script(customer: str, memory: dict[str, Any]) -> list[Any]:
-    """Demo step 4: the distilled tool breaks on a schema change; the model falls back and proposes v2."""
+    """Demo step 4: the rebuilt (import-based) tool breaks on the schema change; the model falls back and proposes v3."""
 
     def after_structured_error(messages):
         failed = last_results(messages)[0]
-        assert failed["is_error"] and failed["content"] == STRUCTURED_ERROR_V1
+        assert failed["is_error"] and failed["content"] == STRUCTURED_ERROR_V2
         return Response([tool_use("gmail_search", {"query": f"from:{customer} order", "since": "7d"})])
 
-    def get_message(messages):
+    def import_without_currency(messages):
         memory["message_id"] = result_json(messages)[0]["id"]
-        return Response([tool_use("gmail_get_message", {"id": memory["message_id"]})])
+        return Response([tool_use("billing_import_from_email", {"message_id": memory["message_id"]})])
 
-    def find_customer(messages):
-        memory["order"] = result_json(messages)
-        return Response([tool_use("billing_find_customer", {"name": customer})])
-
-    def create_without_currency(messages):
-        memory["customer"] = result_json(messages)
-        return Response([tool_use("billing_create_invoice", {"customer_id": memory["customer"]["id"], "lines": memory["order"]["lines"]})])
-
-    def create_with_currency(messages):
+    def import_with_currency(messages):
         failed = last_results(messages)[0]
         assert failed["is_error"] and failed["content"] == "missing required property 'currency'"
-        return Response([tool_use("billing_create_invoice", {"customer_id": memory["customer"]["id"], "lines": memory["order"]["lines"], "currency": "USD"})])
+        return Response([tool_use("billing_import_from_email", {"message_id": memory["message_id"], "currency": "USD"})])
 
     def finish(messages):
         memory["invoice"] = result_json(messages)
-        return end_turn("Created the invoice with the base tools.")
+        return end_turn("Imported the invoice with the base tools.")
 
-    def propose_replacement(messages):
+    def propose_v3(messages):
         nudge = last_user_text(messages)
         assert nudge.startswith(f"The distilled tool '{TOOL_NAME}' failed in this run and has been disabled")
         assert f"same name, '{TOOL_NAME}'" in nudge
-        return Response([tool_use("propose_distilled_tool", {
+        return propose({
             "name": TOOL_NAME,
-            "description": "Create a draft invoice (in USD) for a customer from their most recent order email.",
-            "input_schema": {"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]},
-            "code": PROPOSED_V2,
+            "description": "Import a customer's most recent order email as a draft invoice in USD.",
+            "input_schema": TOOL_SCHEMA,
+            "code": PROPOSED_V3,
             "test_inputs": {"customer": customer},
-        })])
+        })
 
     def after_verdict(messages):
         verdict = last_results(messages)[0]
@@ -243,17 +258,62 @@ def fallback_script(customer: str, memory: dict[str, Any]) -> list[Any]:
     return [
         Response([tool_use(TOOL_NAME, {"customer": customer})]),
         after_structured_error,
-        get_message,
-        find_customer,
-        create_without_currency,
-        create_with_currency,
+        import_without_currency,
+        import_with_currency,
         finish,
-        propose_replacement,
+        propose_v3,
         after_verdict,
     ]
 
 
-# --------------------------------------------------------------------------------- test
+def updated_definitions_script(customer: str, memory: dict[str, Any]) -> list[Any]:
+    """Step 4, other variant: the definitions changed too, the old tool is already gone, the model goes straight to v2."""
+
+    def get_message(messages):
+        memory["message_id"] = result_json(messages)[0]["id"]
+        return Response([tool_use("gmail_get_message", {"id": memory["message_id"]})])
+
+    def find_customer(messages):
+        memory["order"] = result_json(messages)
+        return Response([tool_use("billing_find_customer", {"name": customer})])
+
+    def create(messages):
+        memory["customer"] = result_json(messages)
+        return Response([tool_use("billing_create_invoice", {"customer_id": memory["customer"]["id"], "lines": memory["order"]["lines"], "currency": "USD"})])
+
+    def finish(messages):
+        memory["invoice"] = result_json(messages)
+        return end_turn("Created the invoice.")
+
+    def propose_v2(messages):
+        nudge = last_user_text(messages)
+        assert nudge.startswith("This run succeeded and took 4 base tool calls.")
+        return propose({
+            "name": TOOL_NAME,
+            "description": "Create a draft invoice for a customer from their most recent order email.",
+            "input_schema": TOOL_SCHEMA,
+            "code": UPDATED_DEFINITIONS_V2,
+            "test_inputs": {"customer": customer},
+        })
+
+    def after_verdict(messages):
+        verdict = last_results(messages)[0]
+        memory["verdict"] = verdict["content"]
+        assert not verdict["is_error"], verdict["content"]
+        return end_turn("Saved the new version.")
+
+    return [
+        Response([tool_use("gmail_search", {"query": f"from:{customer} order", "since": "7d"})]),
+        get_message,
+        find_customer,
+        create,
+        finish,
+        propose_v2,
+        after_verdict,
+    ]
+
+
+# --------------------------------------------------------------------------------- tests
 
 
 @pytest.fixture
@@ -267,30 +327,43 @@ def world():
         invoice.set_switch(name, None)
 
 
-def test_demo_steps_1_2_and_4(store, world):
-    # The tool list handed to ToolDistill stays stale throughout (no `currency` field): step 4 is the
-    # "API changed before its tool definition did" variant of the demo.
-    td = ToolDistill(
+def make_td(store, world, *, tools=None, distiller=None, check_schemas_on_start=True) -> ToolDistill:
+    return ToolDistill(
         store,
         executor=world.execute_tool,
-        tools=world.tool_definitions(currency=False),
+        tools=tools if tools is not None else world.tool_definitions(currency=False),
+        health_probe=world.probe,
+        distiller=distiller,
         auto_promote=True,
         allow_live_verification=True,
         min_calls_to_distill=4,
         fallback_distiller=False,
+        check_schemas_on_start=check_schemas_on_start,
     )
-    registry = td.registry
 
-    # ---- step 1: outage on, discovery run, proposal, verified, promoted -------------------------
+
+def run_discovery(td, world) -> tuple[Any, dict[str, Any]]:
     world.set_switch("import_outage", True)
     memory: dict[str, Any] = {}
     model = ScriptedModel(discovery_script("ACME", memory))
     report = run_agent(td, model, world.task_for("ACME"), task_succeeded=world.task_succeeded)
     assert model.turns == [] and report.outcome is True
+    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"
+    return report, memory
+
+
+def test_demo_script_with_a_stale_tool_list(store, world):
+    """Steps 1-4 of the demo. The tool list handed to ToolDistill never learns about `currency`."""
+    rebuilt = Proposal(TOOL_NAME, "Import a customer's most recent order email as a draft invoice.", TOOL_SCHEMA, REBUILT_V2, {"customer": "ACME"})
+    distiller = FakeDistiller(rebuilt)
+    td = make_td(store, world, distiller=distiller)
+    registry = td.registry
+
+    # ---- step 1: outage on, discovery run, proposal, verified, promoted -------------------------
+    report, memory = run_discovery(td, world)
     assert report.base_calls == 11 and report.distilled_calls == 0 and report.propose_calls == 1
     assert report.nudged and report.model_turns == 13
     assert (report.input_tokens, report.output_tokens) == (13 * 500, 13 * 50)
-    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"
     assert world.task_succeeded(world.task_for("ACME")) and memory["invoice"]["id"] == "inv_0001"
     v1 = registry.get_version(TOOL_NAME, 1)
     assert (v1.status, v1.status_reason) == (Status.ACTIVE, "auto_promote")
@@ -300,8 +373,7 @@ def test_demo_steps_1_2_and_4(store, world):
         "billing_create_invoice", "billing_find_customer", "gmail_get_message", "gmail_search",
     ]
     assert [t["name"] for t in td.active_tools()] == [TOOL_NAME]
-    assert model.tool_names_offered[0][-1] == "propose_distilled_tool" and TOOL_NAME not in model.tool_names_offered[0]
-    assert (registry.code_file(v1)).read_text(encoding="utf-8") == PROPOSED_V1
+    assert registry.code_file(v1).read_text(encoding="utf-8") == PROPOSED_V1
 
     # ---- step 2: a new customer, one distilled call (4 base calls inside) -----------------------
     memory = {}
@@ -311,46 +383,94 @@ def test_demo_steps_1_2_and_4(store, world):
     assert TOOL_NAME in model.tool_names_offered[0]
     assert report.distilled_calls == 1 and report.distilled_failures == 0 and report.inner_calls == 4
     assert report.base_calls == 0 and report.propose_calls == 0 and not report.nudged
-    assert memory["invoice"]["customer_id"] == "cust_globex" and memory["invoice"]["status"] == "draft"
-    assert world.task_succeeded(world.task_for("Globex"))
+    assert memory["invoice"]["customer_id"] == "cust_globex" and world.task_succeeded(world.task_for("Globex"))
     stats = registry.list_run_stats(TOOL_NAME, 1)
     assert len(stats) == 1 and stats[0].success and stats[0].calls == 4 and stats[0].trace_id == report.trace_id
-    children = [c for c in registry.list_tool_calls(report.trace_id) if c.parent_call_id is not None]
-    assert [c.tool_name for c in children] == ["gmail_search", "gmail_get_message", "billing_find_customer", "billing_create_invoice"]
+
+    # ---- step 3: the outage ends; tool-updated -> suspect(avoided_tool_recovered) -> rebuild ----
+    world.set_switch("import_outage", False)
+    update = td.on_tool_updated("billing_import_from_email")
+    [action] = update.actions
+    assert (action.version, action.to_status, action.reason, action.detail) == (1, Status.SUSPECT, REASON_AVOIDED_TOOL_RECOVERED, "queued for rebuild")
+    assert [t["name"] for t in td.active_tools()] == [TOOL_NAME]  # still exposed while it waits for the rebuild
+    assert [(i.version, i.base_tool) for i in registry.list_rebuild_queue()] == [(1, "billing_import_from_email")]
+    # the health probe would have found the same recovery on its own
+    assert td.health().recovered == ["billing_import_from_email"] and td.health().actions == []
+
+    rebuild = td.rebuild(TOOL_NAME)
+    assert rebuild.rebuilt and rebuild.message == f"rebuilt '{TOOL_NAME}' as v2: verified: 2 base tool calls vs baseline 11"
+    assert distiller.calls[0]["name"] == TOOL_NAME and "'billing_import_from_email' is available again" in distiller.calls[0]["note"]
+    assert distiller.calls[0]["trace_id"] == v1.source_trace_id
+    v2 = registry.get_version(TOOL_NAME, 2)
+    assert (v2.status, v2.status_reason, v2.measured_calls, v2.baseline_calls) == (Status.ACTIVE, "auto_promote", 2, 11)
+    assert rebuild.result is not None and rebuild.result.report is not None and rebuild.result.report.used_live
+    assert [f.base_tool for f in registry.list_fixtures(TOOL_NAME, 2)][-1] == "billing_import_from_email"  # saved live
+    assert registry.list_rebuild_queue() == []
+    assert (registry.get_version(TOOL_NAME, 1).status, registry.get_version(TOOL_NAME, 1).status_reason) == (Status.DEPRECATED, "superseded_by_v2")
+    assert [d.base_tool for d in registry.list_dependencies(TOOL_NAME, 2)] == ["billing_import_from_email", "gmail_search"]
+    assert td.active_tools()[0]["description"] == "Import a customer's most recent order email as a draft invoice."
 
     # ---- step 4: the billing API now requires currency; the tool definitions do not know yet ----
-    world.set_switch("import_outage", False)
     world.set_switch("schema_currency", True)
     memory = {}
     model = ScriptedModel(fallback_script("Initech", memory))
     report = run_agent(td, model, world.task_for("Initech"), task_succeeded=world.task_succeeded)
-    assert model.turns == [] and report.outcome is True and report.model_turns == 9
-    assert report.distilled_calls == 1 and report.distilled_failures == 1 and report.inner_calls == 4
-    assert report.base_calls == 5 and report.propose_calls == 1 and report.nudged
+    assert model.turns == [] and report.outcome is True and report.model_turns == 7
+    assert report.distilled_calls == 1 and report.distilled_failures == 1 and report.inner_calls == 2
+    assert report.base_calls == 3 and report.propose_calls == 1 and report.nudged
     assert report.steps[0] == (TOOL_NAME, True) and report.steps[-1] == ("propose_distilled_tool", False)
-    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"
+    assert memory["verdict"] == "verified: 2 base tool calls vs baseline 11"
     assert world.task_succeeded(world.task_for("Initech")) and memory["invoice"]["currency"] == "USD"
 
-    v1 = registry.get_version(TOOL_NAME, 1)
-    assert (v1.status, v1.status_reason) == (Status.DEPRECATED, "superseded_by_v2")
-    assert [(e.to_status, e.reason) for e in registry.list_status_events(TOOL_NAME, 1)] == [
+    assert [(e.to_status, e.reason) for e in registry.list_status_events(TOOL_NAME, 2)] == [
         (Status.DRAFT, "pending_verification"),
         (Status.VERIFIED, "checks_passed"),
         (Status.ACTIVE, "auto_promote"),
         (Status.SUSPECT, "runtime_failure"),
-        (Status.DEPRECATED, "superseded_by_v2"),
+        (Status.DEPRECATED, "superseded_by_v3"),
     ]
-    v2 = registry.get_version(TOOL_NAME, 2)
-    assert (v2.status, v2.status_reason) == (Status.ACTIVE, "auto_promote")
-    assert v2.baseline_calls == 11 and v2.measured_calls == 4 and v2.source_trace_id == report.trace_id
-    assert registry.list_avoided_tools(TOOL_NAME, 2) == []
-    assert [t["name"] for t in td.active_tools()] == [TOOL_NAME]
-    assert td.active_tools()[0]["description"].startswith("Create a draft invoice (in USD)")
-    failures = [s for s in registry.list_run_stats(TOOL_NAME, 1) if not s.success]
-    assert len(failures) == 1 and failures[0].error == "missing required property 'currency'" and failures[0].calls == 4
+    v3 = registry.get_version(TOOL_NAME, 3)
+    assert (v3.status, v3.status_reason) == (Status.ACTIVE, "auto_promote")
+    assert v3.baseline_calls == 11 and v3.measured_calls == 2 and v3.source_trace_id == report.trace_id
+    assert registry.list_avoided_tools(TOOL_NAME, 3) == []
+    assert td.active_tools()[0]["description"].endswith("in USD.")
+    failures = [s for s in registry.list_run_stats(TOOL_NAME, 2) if not s.success]
+    assert len(failures) == 1 and failures[0].error == "missing required property 'currency'" and failures[0].calls == 2
     calls = registry.list_tool_calls(report.trace_id)
-    assert [(c.kind, c.is_error) for c in calls[:5]] == [
-        (CallKind.DISTILLED, True), (CallKind.BASE, False), (CallKind.BASE, False), (CallKind.BASE, False), (CallKind.BASE, True),
+    assert [(c.kind, c.is_error) for c in calls[:3]] == [(CallKind.DISTILLED, True), (CallKind.BASE, False), (CallKind.BASE, True)]
+    assert calls[0].error == STRUCTURED_ERROR_V2
+    td.close()
+
+
+def test_demo_step_4_with_updated_tool_definitions(store, world):
+    """The other step-4 variant: the definitions changed too, so the startup check catches it before the first run."""
+    td = make_td(store, world)
+    run_discovery(td, world)
+    assert td.registry.get_version(TOOL_NAME, 1).status is Status.ACTIVE
+    td.close()
+
+    world.set_switch("schema_currency", True)
+    td = make_td(store, world, tools=world.tool_definitions(currency=True))
+    assert td.startup_report is not None and td.startup_report.changed == ["billing_create_invoice"]
+    [action] = td.startup_report.actions
+    assert (action.version, action.from_status, action.to_status, action.reason) == (1, Status.ACTIVE, Status.DEPRECATED, "static_failed")
+    assert "missing required property 'currency'" in action.detail
+    assert [(e.to_status, e.reason) for e in td.registry.list_status_events(TOOL_NAME, 1)][-2:] == [
+        (Status.SUSPECT, "dependency_changed"),
+        (Status.DEPRECATED, "static_failed"),
     ]
-    assert calls[0].error == STRUCTURED_ERROR_V1
+    assert td.active_tools() == []
+
+    memory: dict[str, Any] = {}
+    model = ScriptedModel(updated_definitions_script("Globex", memory))
+    report = run_agent(td, model, world.task_for("Globex"), task_succeeded=world.task_succeeded)
+    assert model.turns == [] and report.outcome is True and report.model_turns == 7
+    assert TOOL_NAME not in model.tool_names_offered[0]  # the deprecated version was not offered
+    assert report.base_calls == 4 and report.distilled_calls == 0 and report.nudged
+    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"  # baseline inherited from v1
+    v2 = td.registry.get_version(TOOL_NAME, 2)
+    assert (v2.status, v2.status_reason, v2.measured_calls) == (Status.ACTIVE, "auto_promote", 4)
+    assert [d.base_tool for d in td.registry.list_dependencies(TOOL_NAME, 2)] == [
+        "billing_create_invoice", "billing_find_customer", "gmail_get_message", "gmail_search",
+    ]
     td.close()

@@ -4,13 +4,14 @@ Every change is checked against the transition table from CLAUDE.md and written 
 Exposure rules (what ``active_tools()`` returns) live here too.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from tooldistill.core.config import Settings
 from tooldistill.core.errors import InvalidTransition, LifecycleError
 from tooldistill.core.models import (
     REASON_AVOIDED_TOOL_RECOVERED,
+    REASON_DEPENDENCY_CHANGED,
     REASON_NEEDS_LIVE_VERIFICATION,
     REASON_RUNTIME_FAILURE,
     Status,
@@ -19,19 +20,24 @@ from tooldistill.core.models import (
 from tooldistill.core.registry import Registry
 from tooldistill.core.runtime import Executor
 from tooldistill.core.tools import ToolSet
-from tooldistill.core.verifier import HealthProbe, VerifyReport, verify
+from tooldistill.core.verifier import HealthProbe, VerifyReport, probe_healthy, verify
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "EXPOSED_SUSPECT_REASONS",
+    "Action",
+    "HealthReport",
     "PromoteResult",
+    "ToolUpdateReport",
     "active_tool_defs",
     "apply_verification",
     "demote",
     "dependencies_changed",
     "deprecate",
     "exposed_versions",
+    "health",
     "is_exposable",
+    "on_tool_updated",
     "promote",
     "reverify",
     "runnable_version",
@@ -297,3 +303,132 @@ def runnable_version(registry: Registry, name: str) -> VersionRecord | None:
         if is_exposable(candidate):
             return candidate
     return None
+
+
+# ------------------------------------------------------------------ base tool changes
+
+
+@dataclass(slots=True)
+class Action:
+    """One status change made in reaction to a base tool change."""
+
+    tool_name: str
+    version: int
+    from_status: Status
+    to_status: Status
+    reason: str
+    detail: str = ""
+
+
+@dataclass(slots=True)
+class ToolUpdateReport:
+    base_tool: str
+    current_hash: str | None  # None when the base tool is no longer in the tool list
+    actions: list[Action] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class HealthReport:
+    changed: list[str]  # base tools whose current schema hash differs from a stored dependency hash
+    missing: list[str]  # changed tools that are no longer in the tool list at all
+    recovered: list[str]  # avoided tools whose probe says healthy
+    down: list[str]  # dependencies whose probe says unhealthy (reported only; no transition exists for it)
+    updates: list[ToolUpdateReport] = field(default_factory=list)
+
+    @property
+    def actions(self) -> list[Action]:
+        return [action for update in self.updates for action in update.actions]
+
+
+def on_tool_updated(
+    registry: Registry,
+    tools: ToolSet,
+    settings: Settings,
+    base_tool: str,
+    *,
+    executor: Executor | None = None,
+    health_probe: HealthProbe | None = None,
+) -> ToolUpdateReport:
+    """React to a base tool that changed or came back.
+
+    Every exposed version that depends on it with a different stored schema hash becomes
+    suspect(dependency_changed) and is re-verified at once (back to active, or deprecated). Every exposed
+    version that avoided it becomes suspect(avoided_tool_recovered), stays exposed, and is queued for a rebuild.
+    """
+    current_hash = tools.schema_hash(base_tool) if base_tool in tools else None
+    report = ToolUpdateReport(base_tool=base_tool, current_hash=current_hash)
+    exposed = [v for v in registry.list_versions() if is_exposable(v)]
+
+    for version in exposed:
+        stored = {d.base_tool: d.schema_hash for d in registry.list_dependencies(version.tool_name, version.version)}
+        if base_tool not in stored or stored[base_tool] == current_hash:
+            continue
+        demoted = demote(registry, version.tool_name, version.version, REASON_DEPENDENCY_CHANGED)
+        if demoted is None:
+            continue
+        updated, verdict = reverify(registry, tools, settings, demoted, executor=executor, health_probe=health_probe)
+        report.actions.append(
+            Action(version.tool_name, version.version, version.status, updated.status, updated.status_reason or "", verdict.verdict)
+        )
+
+    for version in exposed:
+        fresh = registry.require_version(version.tool_name, version.version)
+        if not is_exposable(fresh):
+            continue
+        avoided = {a.base_tool for a in registry.list_avoided_tools(fresh.tool_name, fresh.version)}
+        if base_tool not in avoided:
+            continue
+        already_queued = any(
+            item.base_tool == base_tool for item in registry.list_rebuild_queue(name=fresh.tool_name) if item.version == fresh.version
+        )
+        if fresh.status is Status.SUSPECT and already_queued:
+            continue
+        demote(registry, fresh.tool_name, fresh.version, REASON_AVOIDED_TOOL_RECOVERED, base_tool=base_tool)
+        report.actions.append(
+            Action(fresh.tool_name, fresh.version, fresh.status, Status.SUSPECT, REASON_AVOIDED_TOOL_RECOVERED, "queued for rebuild")
+        )
+    return report
+
+
+def health(
+    registry: Registry,
+    tools: ToolSet,
+    settings: Settings,
+    *,
+    executor: Executor | None = None,
+    health_probe: HealthProbe | None = None,
+    schemas_only: bool = False,
+) -> HealthReport:
+    """Detect schema changes (always) and outages or recoveries (only with a probe, never by calling the executor).
+
+    Schema changes are found by comparing the current tool list's hashes with the stored dependency hashes
+    of exposed versions; each changed tool goes through ``on_tool_updated``. With a probe, avoided tools that
+    answer healthy go through ``on_tool_updated`` too, and dependencies that answer unhealthy are reported.
+    """
+    exposed = [v for v in registry.list_versions() if is_exposable(v)]
+    changed: set[str] = set()
+    missing: set[str] = set()
+    dependencies: set[str] = set()
+    avoided: set[str] = set()
+    for version in exposed:
+        for dep in registry.list_dependencies(version.tool_name, version.version):
+            dependencies.add(dep.base_tool)
+            if dep.base_tool not in tools:
+                missing.add(dep.base_tool)
+                changed.add(dep.base_tool)
+            elif tools.schema_hash(dep.base_tool) != dep.schema_hash:
+                changed.add(dep.base_tool)
+        for item in registry.list_avoided_tools(version.tool_name, version.version):
+            avoided.add(item.base_tool)
+    updates = [
+        on_tool_updated(registry, tools, settings, base_tool, executor=executor, health_probe=health_probe)
+        for base_tool in sorted(changed)
+    ]
+    recovered: list[str] = []
+    down: list[str] = []
+    if health_probe is not None and not schemas_only:
+        recovered = [base_tool for base_tool in sorted(avoided) if probe_healthy(health_probe, base_tool)]
+        down = [base_tool for base_tool in sorted(dependencies) if base_tool in tools and not probe_healthy(health_probe, base_tool)]
+        for base_tool in recovered:
+            updates.append(on_tool_updated(registry, tools, settings, base_tool, executor=executor, health_probe=health_probe))
+    return HealthReport(sorted(changed), sorted(missing), recovered, down, updates)

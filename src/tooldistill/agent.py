@@ -20,7 +20,8 @@ from tooldistill.core.models import (
     TraceRecord,
     VersionRecord,
 )
-from tooldistill.core.proposals import IngestResult
+from tooldistill.core.lifecycle import HealthReport, ToolUpdateReport
+from tooldistill.core.proposals import IngestResult, RebuildResult
 from tooldistill.core.registry import Registry
 from tooldistill.core.runtime import (
     CallLog,
@@ -70,7 +71,10 @@ class ToolDistill:
         clashes = [tool.name for tool in self.registry.list_tools() if tool.name in self.tools]
         if clashes:
             raise ToolDefinitionError(f"base tool names collide with existing distilled tools: {', '.join(clashes)}")
-        # check_schemas_on_start is applied by lifecycle.health() (build step 7).
+        # The startup check compares schema hashes only and re-verifies by replay (no executor: no side effects).
+        self.startup_report: HealthReport | None = None
+        if self.settings.check_schemas_on_start:
+            self.startup_report = lifecycle.health(self.registry, self.tools, self.settings, schemas_only=True)
 
     @classmethod
     def from_config(
@@ -144,6 +148,43 @@ class ToolDistill:
             health_probe=self.health_probe,
             rebuild_of=rebuild_of,
         )
+
+    # ------------------------------------------------------------ base tool changes
+
+    def on_tool_updated(self, base_tool: str) -> ToolUpdateReport:
+        """A base tool changed or came back: re-verify dependents, queue rebuilds for versions that avoided it."""
+        return lifecycle.on_tool_updated(
+            self.registry, self.tools, self.settings, base_tool, executor=self.executor, health_probe=self.health_probe
+        )
+
+    def health(self, *, probe: bool = True) -> HealthReport:
+        """Compare schema hashes with the stored dependencies and, with a probe configured, look for recoveries."""
+        return lifecycle.health(
+            self.registry,
+            self.tools,
+            self.settings,
+            executor=self.executor,
+            health_probe=self.health_probe if probe else None,
+            schemas_only=not probe,
+        )
+
+    def rebuild(self, name: str) -> RebuildResult:
+        """Rebuild a queued distilled tool with the Distiller; the proposal is verified like any other."""
+        result = proposals.rebuild(
+            self.registry,
+            self.tools,
+            self.settings,
+            name,
+            distiller=self.distiller,
+            executor=self.executor,
+            health_probe=self.health_probe,
+        )
+        if result.result is not None and result.result.version is not None:
+            version = result.result.version
+            if version.source_trace_id is not None:
+                payload = {"name": name, "code": self.registry.read_code(version), "rebuild_item": result.item.id}
+                self._record_propose(version.source_trace_id, payload, result.result, source="rebuild")
+        return result
 
     def _record_propose(self, trace_id: str, payload: Mapping[str, Any], result: IngestResult, *, source: str) -> None:
         self.registry.add_tool_call(

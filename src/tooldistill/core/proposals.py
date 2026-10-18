@@ -12,8 +12,8 @@ from jsonschema import Draft202012Validator
 
 from tooldistill.core import lifecycle
 from tooldistill.core.config import Settings
-from tooldistill.core.errors import ProposalRejected
-from tooldistill.core.models import CallKind, Proposal, RebuildItem, TraceData, VersionRecord
+from tooldistill.core.errors import LifecycleError, ProposalRejected
+from tooldistill.core.models import CallKind, Distiller, Proposal, RebuildItem, TraceData, VersionRecord
 from tooldistill.core.registry import Registry
 from tooldistill.core.runtime import Executor
 from tooldistill.core.serialization import canonical_json, is_json_serializable
@@ -26,9 +26,12 @@ __all__ = [
     "PROPOSE_TOOL_INPUT_SCHEMA",
     "IngestResult",
     "Measurements",
+    "RebuildResult",
     "ingest",
     "measure",
     "proposal_from_input",
+    "rebuild",
+    "rebuild_note",
     "validate",
 ]
 
@@ -217,3 +220,73 @@ def ingest(
     if rebuild_of is not None and report.passed:
         registry.resolve_rebuild(rebuild_of.id)
     return IngestResult(accepted=True, verdict=report.verdict, version=final, report=report)
+
+
+# ------------------------------------------------------------------------------- rebuild
+
+
+@dataclass(slots=True)
+class RebuildResult:
+    item: RebuildItem
+    result: IngestResult | None
+    message: str
+
+    @property
+    def rebuilt(self) -> bool:
+        return self.result is not None and self.result.verified
+
+
+def rebuild_note(item: RebuildItem, version: VersionRecord, tools: ToolSet) -> str:
+    """What the Distiller is told on top of the source trace when a base tool came back."""
+    parts = [f"The base tool '{item.base_tool}' is available again."]
+    if item.base_tool in tools:
+        parts.append(f"Its input schema is {canonical_json(tools[item.base_tool].input_schema)}.")
+    current = f" and makes {version.measured_calls} base tool calls" if version.measured_calls is not None else ""
+    parts.append(
+        f"Version {version.version} of '{item.tool_name}' avoided it because every call to it failed in the source run{current}."
+    )
+    parts.append(
+        f"Propose a shorter version of '{item.tool_name}' that uses '{item.base_tool}' where it helps; it must make fewer "
+        f"base tool calls than the current version. Calls to '{item.base_tool}' have no recorded responses in the "
+        "source run, so they will be verified live."
+    )
+    return " ".join(parts)
+
+
+def rebuild(
+    registry: Registry,
+    tools: ToolSet,
+    settings: Settings,
+    name: str,
+    *,
+    distiller: Distiller,
+    executor: Executor | None = None,
+    health_probe: HealthProbe | None = None,
+) -> RebuildResult:
+    """Take the oldest open rebuild item for ``name``, ask the Distiller for a new version, ingest it.
+
+    The item is resolved only when the new version verifies; otherwise it stays queued for another attempt.
+    """
+    items = registry.list_rebuild_queue(name=name)
+    if not items:
+        raise LifecycleError(f"'{name}' has no open rebuild item (tool-updated or health queues one when a base tool recovers)")
+    item = items[0]
+    version = registry.require_version(item.tool_name, item.version)
+    if version.source_trace_id is None:
+        raise LifecycleError(f"{version.label} has no source trace to rebuild from")
+    trace = registry.get_trace_data(version.source_trace_id)
+    proposal = distiller.distill(trace, tools, note=rebuild_note(item, version, tools), name=name)
+    if proposal is None:
+        return RebuildResult(item, None, f"the distiller made no proposal for '{name}'; the rebuild stays queued")
+    if proposal.name != name:
+        return RebuildResult(item, None, f"the distiller proposed '{proposal.name}' instead of '{name}'; the rebuild stays queued")
+    result = ingest(
+        registry, tools, settings, proposal, source_trace_id=trace.trace.id, executor=executor, health_probe=health_probe,
+        rebuild_of=item,
+    )
+    if result.verified:
+        assert result.version is not None
+        message = f"rebuilt '{name}' as v{result.version.version}: {result.verdict}"
+    else:
+        message = f"rebuild of '{name}' was not verified: {result.verdict}; the rebuild stays queued"
+    return RebuildResult(item, result, message)

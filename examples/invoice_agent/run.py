@@ -32,7 +32,8 @@ from tooldistill.core.config import load_config  # noqa: E402
 
 SYSTEM = (
     "You are an operations assistant with tools for email and billing. Complete the task with the tools, "
-    "preferring the most direct path you can find; if a tool fails, work around it with the other tools. "
+    "preferring the most direct path you can find: if one tool completes the whole task in a single call, use it "
+    "instead of several smaller tools. If a tool fails, work around it with the other tools. "
     "When the task is done, reply with one line stating what you did."
 )
 

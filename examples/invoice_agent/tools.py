@@ -67,9 +67,9 @@ def set_switch(name: str, value: bool | None) -> None:
 # ----------------------------------------------------------------------------- fake world
 
 CUSTOMERS: list[dict[str, Any]] = [
-    {"id": "cust_acme", "name": "ACME", "email": "orders@acme.example"},
-    {"id": "cust_globex", "name": "Globex", "email": "purchasing@globex.example"},
-    {"id": "cust_initech", "name": "Initech", "email": "ap@initech.example"},
+    {"id": "cust_acme", "name": "ACME", "email": "orders@acme.example", "currency": "USD"},
+    {"id": "cust_globex", "name": "Globex", "email": "purchasing@globex.example", "currency": "USD"},
+    {"id": "cust_initech", "name": "Initech", "email": "ap@initech.example", "currency": "USD"},
 ]
 
 MESSAGES: list[dict[str, Any]] = [
@@ -78,7 +78,7 @@ MESSAGES: list[dict[str, Any]] = [
         "from": "orders@acme.example",
         "subject": "Order #4471",
         "date": "2026-10-14",
-        "body": "Please invoice the attached purchase order. Lines: 3x WIDGET-4, 1x SHIP-STD.",
+        "body": "Please invoice the attached purchase order. Lines: 3x WIDGET-4, 1x SHIP-STD. All prices in USD.",
         "lines": [
             {"sku": "WIDGET-4", "description": "Widget, 4-pack", "qty": 3, "unit_price": 19.5},
             {"sku": "SHIP-STD", "description": "Standard shipping", "qty": 1, "unit_price": 8.0},
@@ -99,7 +99,7 @@ MESSAGES: list[dict[str, Any]] = [
         "from": "purchasing@globex.example",
         "subject": "Order #9920 for October",
         "date": "2026-10-13",
-        "body": "Order details below. Lines: 10x GADGET-1.",
+        "body": "Order details below. Lines: 10x GADGET-1. Prices are in USD.",
         "lines": [{"sku": "GADGET-1", "description": "Gadget", "qty": 10, "unit_price": 42.0}],
         "attachments": [],
     },
@@ -108,7 +108,7 @@ MESSAGES: list[dict[str, Any]] = [
         "from": "ap@initech.example",
         "subject": "Order #310 (TPS reports)",
         "date": "2026-10-12",
-        "body": "New order: 25x COVER-SHEET.",
+        "body": "New order: 25x COVER-SHEET. Bill in USD as usual.",
         "lines": [{"sku": "COVER-SHEET", "description": "TPS cover sheet", "qty": 25, "unit_price": 1.2}],
         "attachments": [{"id": "att_2", "filename": "order-310.pdf"}],
     },
@@ -369,7 +369,10 @@ def tool_definitions(*, currency: bool) -> list[dict[str, Any]]:
         },
         {
             "name": "billing_import_from_email",
-            "description": "Create a draft invoice directly from an order email (matches the customer by sender).",
+            "description": (
+                "The fastest way to invoice an order email: creates the draft invoice straight from a message id, "
+                "matching the customer by sender and parsing the order lines. Try this first for order emails."
+            ),
             "input_schema": {"type": "object", "properties": import_props, "required": import_required},
         },
         {
