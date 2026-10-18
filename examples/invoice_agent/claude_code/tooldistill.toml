@@ -1,0 +1,11 @@
+# tooldistill inside Claude Code: the plugin's server and hooks read this file (found through CLAUDE_PROJECT_DIR).
+store = ".tooldistill"
+mcp_config = ".mcp.json"            # the same servers Claude Code uses, under the same names
+distiller_model = "claude-sonnet-5-5"
+fallback_distiller = false          # in Claude Code the user triggers distillation with /tooldistill:distill
+auto_promote = true                 # a verified distilled tool is offered to Claude in the next session
+min_calls_to_distill = 4
+min_call_reduction = 0.0             # Claude often finds the short path at once; a tool with the same number of calls still saves the turns
+max_exposed_tools = 20
+allow_live_verification = true      # the invoice tools are fake, so live verification is safe
+check_schemas_on_start = true

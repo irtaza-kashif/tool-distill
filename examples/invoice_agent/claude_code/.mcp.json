@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "invoice": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", "../../..", "python", "../mcp_server.py"],
+      "env": {
+        "INVOICE_SWITCH_FILE": "switches.json"
+      }
+    }
+  }
+}

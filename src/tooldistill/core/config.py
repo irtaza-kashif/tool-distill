@@ -204,6 +204,8 @@ class ServerSpec:
             if not path.is_absolute() and base_dir is not None:
                 path = base_dir / path
             cwd = str(path)
+        elif base_dir is not None and command is not None:
+            cwd = str(base_dir)  # a server listed in a project's config runs from that project, like Claude Code's own
         return cls(
             name=name,
             transport=transport,

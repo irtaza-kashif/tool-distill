@@ -253,3 +253,66 @@ def test_hook_cli_reads_stdin(project: Path):
     assert unknown.exit_code == 1 and "unknown hook event" in unknown.output
     empty = runner.invoke(app, ["hook", "session-end", "--config", str(project)], input="")
     assert empty.exit_code == 1 and "no session_id" not in empty.output or empty.exit_code == 0
+
+
+# ------------------------------------------------------------- payloads recorded from a real Claude Code session
+
+
+def real(event: str, **fields: Any) -> dict[str, Any]:
+    """The shape Claude Code 2.1 actually sends (captured with TOOLDISTILL_HOOK_DUMP, 2026-10-18)."""
+    base: dict[str, Any] = {
+        "session_id": "1af555aa-37d3-4030-add7-fb50aca843c0",
+        "transcript_path": "C:/Users/me/.claude/projects/x/1af555aa.jsonl",
+        "cwd": "C:/Users/me/proj",
+        "hook_event_name": event,
+    }
+    if event in ("PostToolUse", "PostToolUseFailure"):
+        base.update({"effort": "high", "permission_mode": "default", "prompt_id": "p1"})
+    base.update(fields)
+    return base
+
+
+def test_recorded_claude_code_payloads(project: Path):
+    sid = "1af555aa-37d3-4030-add7-fb50aca843c0"
+    start = handle_hook("SessionStart", real("SessionStart", source="startup"), config=project)
+    assert start.exit_code == 0 and f"trace id of this session is {sid}" in start.stdout
+    # a built-in call: recorded under builtin__<Name>, never eligible for a distilled tool
+    search = handle_hook(
+        "PostToolUse",
+        real(
+            "PostToolUse",
+            tool_name="ToolSearch",
+            tool_input={"query": "select:mcp__invoice__gmail_list_labels", "max_results": 1},
+            tool_response={"matches": ["mcp__invoice__gmail_list_labels"], "query": "select:mcp__invoice__gmail_list_labels", "total_deferred_tools": 114},
+            tool_use_id="toolu_01W9m1PZYjPrh7bTsKNwq1te",
+            duration_ms=2,
+        ),
+        config=project,
+    )
+    assert search.exit_code == 0
+    # an MCP call: tool_response is a bare list of content blocks, mcp_server names the server
+    labels = handle_hook(
+        "PostToolUse",
+        real(
+            "PostToolUse",
+            tool_name="mcp__invoice__gmail_list_labels",
+            tool_input={},
+            tool_response=[{"type": "text", "text": '["INBOX", "Orders", "Newsletters"]'}],
+            tool_use_id="toolu_01YSDjvApvpdVt6nPq6GJrv6",
+            duration_ms=8,
+            mcp_server={"name": "invoice", "source": "dynamic"},
+        ),
+        config=project,
+    )
+    assert labels.exit_code == 0 and labels.stderr == ""
+    end = handle_hook("SessionEnd", real("SessionEnd", reason="other"), config=project)
+    assert end.exit_code == 0
+    first, second = rows(project, sid)
+    assert first.tool_name == "builtin__ToolSearch" and first.kind is CallKind.BASE and first.latency_ms == 2
+    assert second.tool_name == "invoice__gmail_list_labels" and second.input == {} and second.latency_ms == 8
+    assert second.output_json == '["INBOX","Orders","Newsletters"]'  # canonical: identical to what call() records live
+    registry = Registry(project.parent / ".tooldistill")
+    try:
+        assert registry.get_trace(sid).finished_at is not None
+    finally:
+        registry.close()

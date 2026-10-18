@@ -130,6 +130,8 @@ def test_server_spec_from_mapping(tmp_path):
     stdio = ServerSpec.from_mapping("invoice", {"command": "uv", "args": ["run", "x"], "env": {"A": "${A:-1}"}, "cwd": "sub"}, base_dir=tmp_path, environ={})
     assert (stdio.transport, stdio.command, stdio.args, stdio.env) == ("stdio", "uv", ("run", "x"), {"A": "1"})
     assert stdio.cwd == str(tmp_path / "sub") and stdio.url is None and stdio.headers == {}
+    default = ServerSpec.from_mapping("invoice", {"command": "uv", "args": ["run", "x"]}, base_dir=tmp_path, environ={})
+    assert default.cwd == str(tmp_path)  # no cwd given: the server runs from the config file's folder
     http = ServerSpec.from_mapping("billing", {"url": "http://x/mcp", "headers": {"Authorization": "Bearer ${T}"}}, environ={"T": "tok"})
     assert (http.transport, http.url, http.headers) == ("http", "http://x/mcp", {"Authorization": "Bearer tok"})
     assert ServerSpec.from_mapping("s", {"type": "sse", "url": "http://x/sse"}).transport == "sse"

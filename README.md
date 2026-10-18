@@ -198,7 +198,7 @@ tooldistill rebuild <name>
 
 ## Claude Code plugin
 
-The same library runs inside Claude Code as a plugin (`plugin/`, rendered by `scripts/render_plugin.py`; `plugin-dev/` runs this checkout). Hooks record the session's tool calls into a trace keyed by the session id, an MCP server offers `propose_distilled_tool` and the verified distilled tools, and `/tooldistill:distill` is how you confirm a task went well and ask for a tool. The project needs a `tooldistill.toml` whose base tools come from MCP servers (`mcp_config = ".mcp.json"`). Install with `claude plugin marketplace add irtaza-kashif/tool-distill` and `claude plugin install tooldistill@tooldistill`, or try the checkout with `claude --plugin-dir <checkout>/plugin-dev`. Details in `plugin/README.md`.
+The same library runs inside Claude Code as a plugin (`plugin/`, rendered by `scripts/render_plugin.py`; `plugin-dev/` runs this checkout). Hooks record the session's tool calls into a trace keyed by the session id, an MCP server offers `propose_distilled_tool` and the verified distilled tools, and `/tooldistill:distill` is how you confirm a task went well and ask for a tool. The project needs a `tooldistill.toml` whose base tools come from MCP servers (`mcp_config = ".mcp.json"`). Install with `claude plugin marketplace add irtaza-kashif/tool-distill` and `claude plugin install tooldistill@tooldistill`, or try the checkout with `claude --plugin-dir <checkout>/plugin-dev`. Details in `plugin/README.md`; a ready-made project to try it in, with the fake invoice tools served over MCP, is `examples/invoice_agent/claude_code/`.
 
 ## The store
 
