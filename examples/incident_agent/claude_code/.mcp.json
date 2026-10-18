@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "incidents": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", "../../..", "python", "../mcp_server.py"],
+      "env": {
+        "INCIDENT_SWITCH_FILE": "switches.json"
+      }
+    }
+  }
+}
