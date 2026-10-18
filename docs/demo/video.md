@@ -1,73 +1,81 @@
-# The 3-minute demo video: shot list, script, numbers
+# The 3-minute demo video: shots, script, numbers
 
-Everything below was dry-run on 2026-10-18 with `claude-sonnet-5-5` as the agent. The numbers are from that pass;
-replace them with your take's numbers (the reports print them). Record each shot as its own clip, in order, and
-run `uv run python scripts/demo_reset.py` before shot 3 and again before shot 9.
+The demo is one program's output. `examples/incident_agent/compare.py` runs the same task twice without tooldistill
+and twice with it, prints each run's calls, tokens and seconds as it goes, and ends with one table. Nothing to type
+live beyond the one command. The Claude Code plugin gets one short segment of its own.
 
-Terminal: Windows Terminal, dark theme, font 16–18 pt, window about 110×32 so the report lines never wrap.
-Narration is recorded last, over the edited cut, segment by segment. Overlays show calls, tokens and seconds only.
+Dry run on 2026-10-18 with `claude-sonnet-5-5`. Replace the numbers with your take's; the script prints them.
+
+```
+uv run --env-file .env python examples/incident_agent/compare.py --alert A-1042
+```
+
+```
+--- without tooldistill, run 1 ---
+    18 tool calls, 114,194 tokens, 32.7s, done
+--- without tooldistill, run 2 ---
+    16 tool calls, 110,320 tokens, 28.7s, done
+--- with tooldistill, run 1 ---
+    18 tool calls, 136,052 tokens, 43.0s, done
+    proposed a distilled tool: verified: 9 base tool calls vs baseline 18; the run spent 121,797 model tokens, the tool spends none; v1 is now active
+--- with tooldistill, run 2 ---
+    2 tool calls, 15,197 tokens, 5.0s, done
+    called the distilled tool 1x (9 base calls inside)
+
+                                                     run 1                               run 2
+------------------------------------------------------------------------------------------------
+without tooldistill                18 calls, 114k tok, 33s                 16 calls, 110k tok, 29s
+with tooldistill                   18 calls, 136k tok, 43s      2 calls (+9 inside), 15k tok, 5s
+
+with tooldistill, run 2 vs run 1: 9x fewer model tokens, 9x faster
+```
+
+The two rows are independent: the "without" row is a plain tool-use loop with no library and no store; the "with"
+row has tooldistill wired in and starts from an empty store. Every run is a new conversation, the fake world is
+reset before each run, and both rows use the same model and system prompt. Add `--verbose` to see every tool call
+scroll by, which is the better footage for the time-skipped part.
 
 ## Shots
 
-| # | Time | Clip | Command (from the repo root unless noted) | Freeze on |
-|---|---|---|---|---|
-| 1 | 0:00–0:18 | Discovery scrolling, sped up, call counter overlay | `uv run --env-file .env python examples/incident_agent/run.py --alert A-1042 --outage` | the report: `base tool calls: 17 (top level)` |
-| 2 | 0:18–0:42 | Diagram overlay `docs/demo/how-it-works.svg` | none | the words "the agent proposes, the library verifies" |
-| 3 | 0:42–1:20 | Split screen: left `examples/sandbox_agent.py` lines 196–220 (the loop with the three `tooldistill:` marks); right the end of shot 1's run: the nudge, the proposal, the verdict | same run as shot 1 | `verified: 9 base tool calls vs baseline 17; the run spent 168,427 model tokens, the tool spends none; v2 is now active` |
-| 4 | 1:05–1:20 | Reuse | `uv run --env-file .env python examples/incident_agent/run.py --alert A-1057` | `distilled calls: 1 (0 failed, 9 base calls inside)` then the savings table overlay |
-| 5 | 1:20–1:35 | CLI | in `examples/incident_agent/`: `uv run tooldistill list`, `uv run tooldistill show rollback_dependency_deploy_for_alert` | the checks table and `avoided: deploys_rollback_latest` |
-| 6 | 1:35–1:48 | Recovery | in `examples/incident_agent/`: `uv run tooldistill tool-updated deploys_rollback_latest`, then `uv run --env-file ../../.env tooldistill rebuild rollback_dependency_deploy_for_alert` | `rebuilt ... as v3: verified: 8 base tool calls vs baseline 17; ...; v3 is now active and replaces v2` |
-| 7 | 1:48–2:00 | The API changes | `uv run --env-file .env python examples/incident_agent/run.py --alert A-1042 --schema-reason` | the structured error block, 2 s, then `v4 is now active and replaces v3` |
-| 8 | 2:00–2:42 | Claude Code | in `examples/incident_agent/claude_code/` with `"rollback_outage": true` in `switches.json`: `claude --plugin-dir ../../../plugin-dev`; ask for alert A-1042; `/tooldistill:distill handle a firing alert end to end`; new session; ask for A-1057 | the plugin's tool call in the second session |
-| 9 | 2:42–3:00 | Close card | none | the two install lines and the repo URL |
+| # | Time | Clip | How |
+|---|---|---|---|
+| 1 | 0:00–0:15 | The problem: a terminal running `compare.py --verbose`, the "without" runs scrolling, sped up, with a tool-call counter overlay | start the recording at the command; keep the first "without" run |
+| 2 | 0:15–0:40 | How it works: the diagram overlay `docs/demo/how-it-works.svg` | overlay over a dimmed terminal |
+| 3 | 0:40–1:35 | The same recording continued: "with" run 1 scrolling, then the proposal and verdict line (freeze 2 s), then "with" run 2 (real time, it is 5 s), then the table (freeze 4 s) | one take of `compare.py --verbose`, time-skipped in the edit |
+| 4 | 1:35–2:00 | Keeping tools current: a second terminal clip, `uv run --env-file .env python examples/incident_agent/run.py --alert A-1042 --schema-reason` after a `compare.py` run has left a tool in `examples/incident_agent/.tooldistill` (run `run.py --alert A-1042 --outage` once first to create it there); freeze on the structured error, then on `v2 is now active and replaces v1` | optional; cut if time is short |
+| 5 | 2:00–2:40 | Claude Code: in `examples/incident_agent/claude_code/` with `"rollback_outage": true` in `switches.json`, `claude --plugin-dir ../../../plugin-dev`; ask for alert A-1042; `/tooldistill:distill handle a firing alert end to end`; new session; ask for A-1057; the plugin's tool answers in one call | two short sessions, time-skipped |
+| 6 | 2:40–3:00 | Close card: `pip install tooldistill`, `claude plugin marketplace add irtaza-kashif/tool-distill`, the repo URL, "verified · reusable · kept current" | overlay |
 
-The tool's name is whatever the model chose in your take (`uv run tooldistill list` shows it); in the dry run it was
-`rollback_dependency_deploy_for_alert`. Type names out: PowerShell treats `<name>` as redirection.
-
-## The numbers (dry run, Sonnet 5.5)
-
-| | Discovery (shot 1) | Reuse (shot 4) |
-|---|---|---|
-| Base tool calls | 17 at the top level, 3 of them failures | 0 at the top level; 1 distilled call with 9 inside |
-| Model tokens | 162,338 in + 6,089 out | 9,591 in + 324 out |
-| Model turns | 15 | 2 |
-| Wall time | 47.9 s | 3.7 s |
-
-Lifecycle: v2 verified at 9 calls; the rebuild after the shortcut recovered gives v3 at 8; the schema change fails v3
-at step 6 of 8 with a structured error, the fallback run takes 17 base calls, and v4 verifies at 10.
-
-With `--model claude-haiku-5-5` the discovery took 24 base calls and 182,421 tokens; reuse was messier (the cheaper
-model called base tools around the distilled call). Use Sonnet for the takes.
+Shots 1 and 3 are the same recording. `compare.py` writes its own store (`examples/incident_agent/.tooldistill_compare`)
+and wipes it at the start of every run, so repeated takes need no reset. `scripts/demo_reset.py` clears the other
+demo stores before shots 4 and 5.
 
 ## Overlay text
 
-- Shot 1 counter: `tool calls: N` climbing with the scroll; final card `17 calls · 168k tokens · 48 s`.
-- Shot 4 table: `17 calls → 1 call (9 inside)`, `168k tokens → 10k`, `48 s → 3.7 s`.
-- Shot 7: keep the structured error on screen for two seconds; nothing else on it.
-- Shot 8: a three-line card: `SessionStart hook → trace`, `PostToolUse hooks → recorded calls`, `MCP server → the tools, /tooldistill:distill → the proposal`.
-- Shot 9: `pip install tooldistill` / `claude plugin marketplace add irtaza-kashif/tool-distill` / `github.com/irtaza-kashif/tool-distill` / `verified · reusable · kept current`.
+- Shot 1: a counter `tool calls: N` climbing with the scroll; at the end of the first run, `18 calls · 114k tokens · 33 s`.
+- Shot 3, over the table: `same task, same model` and, under the last cell, `9x fewer tokens · 9x faster`.
+- Shot 4: nothing over the structured error; hold it two seconds.
+- Shot 5: three lines, `SessionStart hook → trace`, `PostToolUse hooks → recorded calls`, `/tooldistill:distill → proposal, MCP server → the tool`.
+- Shot 6: the four lines of the close card.
 
-## Narration (voiceover, ~140 words per minute)
+## Narration (voiceover, ~140 words per minute; 330 words, leaves room for the freezes)
 
-**0:00 (42 words).** An agent solving a real task takes twenty, thirty tool calls of trial and error to find a path that needed eight. The next run starts from zero and does it all again. Here, an alert fires, and the agent hunts for the deploy that caused it.
+**0:00 (44 words).** An agent solving a real task takes twenty tool calls of trial and error to find a path that needed nine. Here, an alert fires and the agent hunts for the deploy that caused it. Run it again, and it starts from zero and hunts again.
 
-**0:18 (62 words).** tooldistill sits beside your agent loop and records every tool call. When a run succeeds and was expensive, the model is asked to write the path down as a distilled tool: one Python function, one call. The library never trusts what the model claims. It checks the code before importing it, replays it against the run's recorded responses, and measures the saving. Only then does the tool enter a lifecycle driven by evidence.
+**0:15 (62 words).** tooldistill sits beside your agent loop and records every tool call. When a run succeeds and was expensive, the model is asked to write the path down as a distilled tool: one Python function, one call. The library never trusts what the model claims. It checks the code before importing it, replays it against the run's recorded responses, and measures the saving. Only then can an agent use it.
 
-**0:42 (82 words).** The integration is a handful of lines: start a trace, route tool calls through it, say whether the task worked. First run: the one-call rollback is down, so the agent works around it. Seventeen calls, a hundred and sixty thousand tokens, forty-eight seconds. Then the nudge, the proposal, and the verdict: verified, nine calls against seventeen, and the tool spends no model tokens at all. Second run, a different alert, a different service: one call, four seconds, and the agent never touched a base tool.
+**0:40 (84 words).** Same task, same model, two loops. Without tooldistill, both runs cost about the same: eighteen calls, a hundred thousand tokens, half a minute. With tooldistill, the first run costs the same, plus a proposal: the model writes the tool, the library verifies it, nine calls against eighteen. The second run is one call. Fifteen thousand tokens instead of a hundred and thirty. Five seconds instead of forty. The loop did not change; the tool list did.
 
-**1:20 (76 words).** Tools rot when the APIs under them change, so the library keeps them current. The command line shows every version, its checks, its history, and the tool it avoided because it was down. When that tool comes back, one command flags the version and a rebuild produces an eight-call one. When the deploy API starts requiring a reason, the tool fails safely: a structured error, the agent falls back to base tools, and that run becomes version four.
+**1:35 (62 words).** Tools rot when the APIs under them change, so the library keeps them current. Every version has its checks and its history. When the deploy API starts requiring a reason, the distilled tool fails safely: a structured error tells the agent which step broke, the agent falls back to the base tools, and that run becomes version two, verified the same way.
 
-**2:00 (58 words).** The same library runs inside Claude Code as a plugin. A hook records the session, a slash command asks Claude to distill the task it just finished, and an MCP server offers the verified tool back. Next session, same alert pattern: one call. Nothing the model says about a tool is believed. Everything is measured, in your own loop or in Claude Code.
+**2:00 (50 words).** The same library runs inside Claude Code as a plugin. A hook records the session, a slash command asks Claude to distill the task it just finished, and an MCP server offers the verified tool back. Next session, same kind of alert: one call. In your own loop, or in Claude Code.
 
-**2:42 (30 words).** pip install tooldistill. The plugin installs from the repository as a marketplace. Verified, reusable, and kept current. tooldistill: your agent proposes, the library verifies.
-
-Total: 350 words, about 2:30 of speech, leaving room for the pauses the freeze frames need.
+**2:40 (28 words).** pip install tooldistill. The plugin installs from the repository as a marketplace. Verified, reusable, and kept current. tooldistill: your agent proposes, the library verifies.
 
 ## Recording checklist
 
-1. `uv run python scripts/demo_reset.py`, then `uv run pytest -q` once, so nothing surprises you mid-take.
-2. Shot 1 is a real model run; if it comes out under 15 calls or the agent never tries the shortcut, reset and run again. It costs a few cents.
-3. Record shots 1, 4, 5, 6, 7 in that order without resetting in between: each depends on the store state the previous one left.
-4. Reset before shot 8, set `rollback_outage` to true in `examples/incident_agent/claude_code/switches.json`, record the two Claude Code sessions, then set it back to false.
-5. Edit: time-skip inside shot 1 (keep the first three calls, the 503 on the shortcut, the last two, the report), overlay the counter and the table, hold the structured error for two seconds.
-6. Narrate over the cut; the segment word counts above fit their slots with pauses.
+1. `uv sync` once in the clone, `.env` with the API key in the repo root, `uv run pytest -q` once.
+2. Record `compare.py --alert A-1042 --verbose` from the repo root, in a terminal about 120 columns wide so the table does not wrap. It takes two to four minutes and costs a dollar or two. If the "with" run 2 is not a single distilled call, run it again.
+3. For shot 4, first `uv run --env-file .env python examples/incident_agent/run.py --alert A-1042 --outage` to create a tool in the normal store, then the `--schema-reason` run.
+4. For shot 5, `uv run python scripts/demo_reset.py`, set `rollback_outage` to true in the Claude Code folder's `switches.json`, record the two sessions, set it back.
+5. Narrate over the edited cut, one segment at a time.

@@ -28,11 +28,27 @@ INVOICE_DIR = ROOT / "examples" / "invoice_agent"  # the agent loop is shared wi
 if str(INVOICE_DIR) not in sys.path:
     sys.path.append(str(INVOICE_DIR))
 
-import tools as incidents  # noqa: E402
 from agent_loop import RunReport, run_agent  # noqa: E402
 
 from tooldistill import ToolDistill  # noqa: E402
 from tooldistill.core.config import load_config  # noqa: E402
+
+
+def _load_world():
+    """The incident world as the module ``incident_tools``, by path: several examples have a ``tools.py``."""
+    import importlib.util
+
+    if "incident_tools" in sys.modules:
+        return sys.modules["incident_tools"]
+    spec = importlib.util.spec_from_file_location("incident_tools", HERE / "tools.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules["incident_tools"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+incidents = _load_world()
 
 SYSTEM = (
     "You are an on-call operations assistant with tools for alerts, services, deploys, logs, metrics, approvals, "

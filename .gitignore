@@ -22,6 +22,7 @@ Thumbs.db
 
 # The demo's own store (recreated by running examples/invoice_agent/run.py)
 examples/**/.tooldistill/
+examples/**/.tooldistill_compare/
 
 # The sandbox store created by examples/sandbox_agent.py, which runs from the repo root
 /.tooldistill/

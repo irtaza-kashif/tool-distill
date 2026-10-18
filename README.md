@@ -209,7 +209,7 @@ The same library runs inside Claude Code as a plugin (`plugin/`, rendered by `sc
 
 ## Demos
 
-Two demos, both with fake tools and a real model. `examples/incident_agent/` is the hard one: an alert fires on a service whose upstream dependency just shipped a bad deploy, and the agent has to find it through paginated lists, hidden API rules and a one-call rollback that is down. A first run takes about 17 base tool calls and 160k model tokens; the distilled tool does it in one call with 9 inside, and the same four-step script (outage, reuse, `tool-updated` plus `rebuild`, schema change) runs through `examples/incident_agent/run.py --alert A-1042 --outage`, `--alert A-1057`, and `--schema-reason`. `docs/demo/video.md` has the shot list and the measured numbers. The invoice demo below is the simpler one.
+Two demos, both with fake tools and a real model. `examples/incident_agent/` is the hard one: an alert fires on a service whose upstream dependency just shipped a bad deploy, and the agent has to find it through paginated lists, hidden API rules and a one-call rollback that is down. `examples/incident_agent/compare.py` runs the same task twice without tooldistill and twice with it and prints one table: without, both runs cost about 18 calls, 110k tokens and 30 s; with, the second run is one distilled call, 15k tokens and 5 s. The four-step lifecycle script (outage, reuse, `tool-updated` plus `rebuild`, schema change) runs through `examples/incident_agent/run.py --alert A-1042 --outage`, `--alert A-1057`, and `--schema-reason`. `docs/demo/video.md` has the shot list and the measured numbers. The invoice demo below is the simpler one.
 
 ### The invoice demo
 
