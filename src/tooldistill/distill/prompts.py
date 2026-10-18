@@ -91,7 +91,8 @@ PROPOSE_TOOL_DESCRIPTION = (
     "replayed against this run's recorded tool responses with your test_inputs, and must use clearly fewer base "
     "tool calls than this run did, which comes from leaving out dead ends and failed calls, never from dropping "
     "steps the task needs. The result tells you the verdict; fix the module and call again if it is rejected. "
-    "Do not propose a tool that duplicates a distilled tool you already have.\n\n"
+    "Do not propose a tool that duplicates a distilled tool you already have; to improve one, propose the better "
+    "version under its name, and it replaces the old version once verified.\n\n"
     + USE_EXISTING_GUIDANCE
     + "\n\n"
     + PROPOSAL_GUIDANCE
@@ -215,6 +216,8 @@ def nudge(
         lines += [
             "",
             f"Distilled tools that already exist: {', '.join(distilled_tools)}. If one of them does this task, do "
-            "not propose a duplicate: reply with one line naming it and saying why you did not use it.",
+            "not propose a duplicate: reply with one line naming it and saying why you did not use it. If one "
+            "nearly does this task, propose the improved version under that same name; once verified, it replaces "
+            "the old version.",
         ]
     return "\n".join(lines)

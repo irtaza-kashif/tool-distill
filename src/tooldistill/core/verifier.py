@@ -35,6 +35,7 @@ class VerifyReport:
     message: str = ""
     measured_calls: int | None = None
     baseline_calls: int | None = None
+    baseline_tokens: int | None = None
     dependencies: tuple[str, ...] = ()
     used_live: bool = False
     needs_live_verification: bool = False
@@ -44,7 +45,10 @@ class VerifyReport:
     def verdict(self) -> str:
         """The one-line text the proposer reads."""
         if self.passed:
-            return f"verified: {self.measured_calls} base tool calls vs baseline {self.baseline_calls}"
+            text = f"verified: {self.measured_calls} base tool calls vs baseline {self.baseline_calls}"
+            if self.baseline_tokens:
+                text += f"; the run spent {self.baseline_tokens:,} model tokens, the tool spends none"
+            return text
         if self.needs_live_verification:
             return f"not verified (replay): {self.message}"
         return f"rejected ({self.failed_check}): {self.message}"
@@ -205,6 +209,9 @@ def verify(
     )
     report.passed = True
     report.message = message
+    report.measured_calls = measured
+    report.baseline_calls = baseline
+    report.baseline_tokens = version.baseline_tokens
     report.notes = notes
     return report
 

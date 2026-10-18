@@ -348,7 +348,7 @@ def run_discovery(td, world) -> tuple[Any, dict[str, Any]]:
     model = ScriptedModel(discovery_script("ACME", memory))
     report = run_agent(td, model, world.task_for("ACME"), task_succeeded=world.task_succeeded)
     assert model.turns == [] and report.outcome is True
-    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"
+    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11; the run spent 6,600 model tokens, the tool spends none"
     return report, memory
 
 
@@ -398,7 +398,7 @@ def test_demo_script_with_a_stale_tool_list(store, world):
     assert td.health().recovered == ["billing_import_from_email"] and td.health().actions == []
 
     rebuild = td.rebuild(TOOL_NAME)
-    assert rebuild.rebuilt and rebuild.message == f"rebuilt '{TOOL_NAME}' as v2: verified: 2 base tool calls vs baseline 11"
+    assert rebuild.rebuilt and rebuild.message == f"rebuilt '{TOOL_NAME}' as v2: verified: 2 base tool calls vs baseline 11; the run spent 7,150 model tokens, the tool spends none"
     assert distiller.calls[0]["name"] == TOOL_NAME and "'billing_import_from_email' is available again" in distiller.calls[0]["note"]
     assert distiller.calls[0]["trace_id"] == v1.source_trace_id
     v2 = registry.get_version(TOOL_NAME, 2)
@@ -467,7 +467,7 @@ def test_demo_step_4_with_updated_tool_definitions(store, world):
     assert model.turns == [] and report.outcome is True and report.model_turns == 7
     assert TOOL_NAME not in model.tool_names_offered[0]  # the deprecated version was not offered
     assert report.base_calls == 4 and report.distilled_calls == 0 and report.nudged
-    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11"  # baseline inherited from v1
+    assert memory["verdict"] == "verified: 4 base tool calls vs baseline 11; the run spent 6,600 model tokens, the tool spends none"  # baseline inherited from v1
     v2 = td.registry.get_version(TOOL_NAME, 2)
     assert (v2.status, v2.status_reason, v2.measured_calls) == (Status.ACTIVE, "auto_promote", 4)
     assert [d.base_tool for d in td.registry.list_dependencies(TOOL_NAME, 2)] == [

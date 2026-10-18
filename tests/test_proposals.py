@@ -14,7 +14,6 @@ from tooldistill.core.errors import ProposalRejected
 from tooldistill.core.models import REASON_AVOIDED_TOOL_RECOVERED, CallKind, Proposal, Status, TraceRecord
 from tooldistill.core.proposals import (
     AVOIDED_REASON,
-    NAME_TAKEN,
     ingest,
     measure,
     proposal_from_input,
@@ -132,10 +131,9 @@ def test_validate_rejections(registry, tools):
         validate(registry, tools, good_proposal(input_schema=[]))  # type: ignore[arg-type]
     add_version(registry)
     registry.set_status(NAME, 1, Status.ACTIVE, "promoted")
-    with pytest.raises(ProposalRejected, match=NAME_TAKEN):
-        validate(registry, tools, good_proposal())
+    validate(registry, tools, good_proposal())  # an active version does not block a proposal: it becomes v2
     registry.set_status(NAME, 1, Status.SUSPECT, "runtime_failure")
-    validate(registry, tools, good_proposal())  # a suspect version does not block its own replacement
+    validate(registry, tools, good_proposal())
 
 
 # ------------------------------------------------------------------------------- ingest
@@ -145,7 +143,7 @@ def test_ingest_verifies_and_records_everything(registry, tools):
     trace = record_discovery(registry)
     result = ingest(registry, tools, Settings(), good_proposal(), source_trace_id=trace.id)
     assert result.accepted and result.verified and not result.is_error
-    assert result.verdict == "verified: 4 base tool calls vs baseline 11"
+    assert result.verdict == "verified: 4 base tool calls vs baseline 11; the run spent 1,200 model tokens, the tool spends none"
     version = result.version
     assert version.status is Status.VERIFIED and version.version == 1
     assert (version.baseline_calls, version.baseline_tokens, version.baseline_latency_ms) == (11, 1200, 79)
@@ -195,7 +193,7 @@ def test_ingest_needs_live_verification_is_not_an_error(registry, tools):
     assert (result.version.status, result.version.status_reason) == (Status.DRAFT, "needs_live_verification")
     live = ingest(registry, tools, Settings(allow_live_verification=True), proposal, source_trace_id=trace.id, executor=acme_executor)
     assert live.verified and live.report.used_live and live.version.version == 2
-    assert live.verdict == "verified: 2 base tool calls vs baseline 11"
+    assert live.verdict == "verified: 2 base tool calls vs baseline 11; the run spent 1,200 model tokens, the tool spends none"
 
 
 def test_baseline_inherits_from_the_previous_version(registry, tools):
@@ -210,7 +208,7 @@ def test_baseline_inherits_from_the_previous_version(registry, tools):
     second = ingest(registry, tools, Settings(), good_proposal(), source_trace_id=short.id)
     assert second.verified and second.version.version == 2
     assert (second.version.baseline_calls, second.version.baseline_tokens, second.version.baseline_latency_ms) == (11, 1200, 79)
-    assert second.verdict == "verified: 4 base tool calls vs baseline 11"
+    assert second.verdict == "verified: 4 base tool calls vs baseline 11; the run spent 1,200 model tokens, the tool spends none"
 
 
 def test_rebuild_resolves_the_queue_item_only_on_success(registry, tools):
@@ -228,7 +226,7 @@ def test_rebuild_resolves_the_queue_item_only_on_success(registry, tools):
     shorter = good_proposal(code=TWO_CALL_TOOL, input_schema=TWO_CALL_SCHEMA)
     rebuilt = ingest(registry, tools, Settings(auto_promote=True, allow_live_verification=True), shorter, source_trace_id=trace.id, executor=acme_executor, rebuild_of=item)
     assert rebuilt.verified and rebuilt.version.version == 3 and rebuilt.version.status is Status.ACTIVE
-    assert rebuilt.verdict == "verified: 2 base tool calls vs baseline 11"
+    assert rebuilt.verdict == "verified: 2 base tool calls vs baseline 11; the run spent 1,200 model tokens, the tool spends none"
     assert registry.list_rebuild_queue() == []
     assert registry.get_version(NAME, 1).status is Status.DEPRECATED
     assert registry.get_version(NAME, 1).status_reason == "superseded_by_v3"

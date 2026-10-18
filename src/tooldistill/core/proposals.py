@@ -13,7 +13,7 @@ from jsonschema import Draft202012Validator
 from tooldistill.core import lifecycle
 from tooldistill.core.config import Settings
 from tooldistill.core.errors import LifecycleError, ProposalRejected
-from tooldistill.core.models import CallKind, Distiller, Proposal, RebuildItem, TraceData, VersionRecord
+from tooldistill.core.models import CallKind, Distiller, Proposal, RebuildItem, TraceData, VersionRecord, Status
 from tooldistill.core.registry import Registry
 from tooldistill.core.runtime import Executor
 from tooldistill.core.serialization import canonical_json, is_json_serializable
@@ -22,7 +22,6 @@ from tooldistill.core.verifier import HealthProbe, VerifyReport, verify
 
 __all__ = [
     "AVOIDED_REASON",
-    "NAME_TAKEN",
     "PROPOSE_TOOL_INPUT_SCHEMA",
     "IngestResult",
     "Measurements",
@@ -36,7 +35,6 @@ __all__ = [
 ]
 
 AVOIDED_REASON = "every call failed in the source run"
-NAME_TAKEN = "name is taken by an active distilled tool; pick a new name or deprecate it first"
 
 PROPOSE_TOOL_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -133,8 +131,6 @@ def validate(registry: Registry, tools: ToolSet, proposal: Proposal) -> None:
         raise ProposalRejected(f"name '{name}' collides with a base tool")
     if name == PROPOSE_TOOL_NAME:
         raise ProposalRejected(f"name '{name}' collides with the propose tool")
-    if registry.active_version(name) is not None:
-        raise ProposalRejected(NAME_TAKEN)
     if not isinstance(proposal.description, str):
         raise ProposalRejected("description must be a string")
     if not isinstance(proposal.input_schema, Mapping) or not is_json_serializable(proposal.input_schema):
@@ -180,6 +176,7 @@ def ingest(
     baseline_tokens = measured.baseline_tokens
     baseline_latency = measured.baseline_latency_ms
     previous = registry.latest_version(proposal.name)
+    active_before = registry.active_version(proposal.name)  # a proposal under an active tool's name replaces it
     if previous is not None:
         # A fallback run after a structured error is far cheaper than the original discovery.
         baseline_calls = max(baseline_calls, previous.baseline_calls or 0)
@@ -219,7 +216,13 @@ def ingest(
     final = lifecycle.apply_verification(registry, settings, version, report)
     if rebuild_of is not None and report.passed:
         registry.resolve_rebuild(rebuild_of.id)
-    return IngestResult(accepted=True, verdict=report.verdict, version=final, report=report)
+    verdict = report.verdict
+    if report.passed and active_before is not None and active_before.version != final.version:
+        if final.status is Status.ACTIVE:
+            verdict += f"; v{final.version} is now active and replaces v{active_before.version}"
+        else:
+            verdict += f"; v{final.version} waits for promotion while v{active_before.version} stays active"
+    return IngestResult(accepted=True, verdict=verdict, version=final, report=report)
 
 
 # ------------------------------------------------------------------------------- rebuild

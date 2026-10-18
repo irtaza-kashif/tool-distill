@@ -126,7 +126,9 @@ async def test_propose_and_run_through_the_server(store: Path):
     assert len(stats) == 1 and stats[0].success
 
     again = await server.call_tool(PROPOSE_TOOL_NAME, {**PROPOSAL, "trace_id": "sess-a"}, context)
-    assert again.is_error and "name is taken by an active distilled tool" in text_of(again)
+    assert not again.is_error and text_of(again).endswith("; v2 is now active and replaces v1"), text_of(again)
+    assert td.registry.get_version(NAME, 1).status_reason == "superseded_by_v2"
+    assert context.session.notifications == 2  # the exposed set changed again (v1 out, v2 in)
     server.close()
 
 

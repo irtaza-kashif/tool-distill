@@ -103,7 +103,7 @@ The product is a **library** (plus a thin CLI in the same package). It never run
 ### Naming rules
 - **All tool names** (base and distilled) must match `^[a-zA-Z0-9_-]{1,64}$`. The Anthropic API rejects dots, so use `gmail_search`, never `gmail.search`.
 - Distilled tool names additionally match `^[a-z][a-z0-9_]{2,63}$` and **must not collide** with any base tool name or the propose tool's name. Reject the proposal if they do.
-- A proposal whose name matches an **existing distilled tool** becomes that tool's next version **only if the tool has no active version** (after a fallback or deprecation, or while it waits for promotion). Otherwise reject: `"name is taken by an active distilled tool; pick a new name or deprecate it first"`.
+- A proposal whose name matches an **existing distilled tool** becomes that tool's next version, whatever the status of the earlier versions. It is verified like any other version and inherits the larger baseline (see Efficiency). If it is activated (auto-promote or `promote`), the previously active version is deprecated as `superseded_by_v<N>`; with auto-promote off it waits at verified while the old version keeps serving. The verdict says which happened. A run that used the active version successfully is never worth distilling, so a replacement can only come from a run where the agent chose not to use it.
 
 ### Serialization rules
 - Executor return values must be JSON-serializable. If not, `trace.execute` records an error and returns `is_error=True`.

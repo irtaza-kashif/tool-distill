@@ -376,3 +376,39 @@ def test_nudge_names_existing_distilled_tools(td):
     assert nudge is not None
     assert f"Distilled tools that already exist: {NAME}. If one of them does this task, do not propose a duplicate" in nudge
     assert "keep every step the task needed" in nudge and "Inputs are only what the request itself states" in nudge
+
+
+def test_proposal_under_an_active_name_replaces_it(store):
+    td = make_td(store, auto_promote=True)
+    activate_good_tool(td)  # v1 active, baseline 31
+    trace = td.start_trace("Create a draft invoice for ACME from their most recent order email.")
+    run_discovery(trace)
+    trace.set_outcome(True)
+    out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)
+    assert not out.is_error, out.content
+    assert out.content.startswith("verified: 4 base tool calls vs baseline 31")
+    assert out.content.endswith("; v2 is now active and replaces v1")
+    v1, v2 = td.registry.get_version(NAME, 1), td.registry.get_version(NAME, 2)
+    assert (v1.status, v1.status_reason) == (Status.DEPRECATED, "superseded_by_v2")
+    assert v2.status is Status.ACTIVE and [t["name"] for t in td.active_tools()] == [NAME]
+    td.close()
+
+
+def test_proposal_under_an_active_name_waits_without_auto_promote(td):
+    activate_good_tool(td)
+    trace = td.start_trace("Invoice ACME")
+    run_discovery(trace)
+    trace.set_outcome(True)
+    out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)
+    assert not out.is_error and out.content.endswith("; v2 waits for promotion while v1 stays active"), out.content
+    assert td.registry.get_version(NAME, 1).status is Status.ACTIVE
+    assert td.registry.get_version(NAME, 2).status is Status.VERIFIED
+
+
+def test_verdict_reports_tokens_when_the_run_recorded_them(td):
+    trace = td.start_trace("Invoice ACME")
+    run_discovery(trace)
+    trace.record_usage({"input_tokens": 12000, "output_tokens": 529})
+    trace.set_outcome(True)
+    out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)
+    assert out.content == "verified: 4 base tool calls vs baseline 8; the run spent 12,529 model tokens, the tool spends none"
