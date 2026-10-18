@@ -17,7 +17,7 @@ from tooldistill.core.errors import ReplayMismatchError, ToolLoadError
 from tooldistill.core.models import REASON_AVOIDED_TOOL_RECOVERED, CheckName, VersionRecord
 from tooldistill.core.registry import Registry
 from tooldistill.core.runtime import Executor, RunContext, load_tool, run_tool
-from tooldistill.core.serialization import code_hash
+from tooldistill.core.serialization import canonical_json, code_hash
 from tooldistill.core.static_check import static_check
 from tooldistill.core.tools import ToolSet
 
@@ -83,6 +83,11 @@ def verify(
         return _fail(registry, version, report, CheckName.STATIC, static.message)
     _record(registry, version, CheckName.STATIC, True, static.message, dependencies=list(static.dependencies))
     report.dependencies = static.dependencies
+    assert static.meta is not None
+    input_schema = static.meta.input_schema
+    registry.update_version_metadata(
+        name, number, description=static.meta.description, input_schema_json=canonical_json(input_schema)
+    )
     registry.replace_dependencies(name, number, {dep: tools.schema_hash(dep) for dep in static.dependencies})
     avoided = {
         item.base_tool: item.reason
@@ -93,7 +98,7 @@ def verify(
 
     # 2. replay ---------------------------------------------------------------------------------
     test_inputs = version.test_inputs
-    schema_errors = sorted(Draft202012Validator(version.input_schema).iter_errors(test_inputs), key=lambda e: list(e.path))
+    schema_errors = sorted(Draft202012Validator(input_schema).iter_errors(test_inputs), key=lambda e: list(e.path))
     if schema_errors:
         return _fail(registry, version, report, CheckName.REPLAY, f"test_inputs do not match input_schema: {schema_errors[0].message}")
     try:

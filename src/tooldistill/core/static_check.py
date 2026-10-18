@@ -320,11 +320,18 @@ def _call_sites(tree: ast.Module, tools: ToolSet) -> list[CallSite]:
         if base is None:
             raise _Fail(line, f"call to '{tool_name}' — no such base tool")
         properties = base.input_schema.get("properties")
-        if isinstance(properties, dict):
+        # JSON Schema allows properties it does not list unless additionalProperties is false. Only then
+        # is an unknown key a static error; otherwise replay decides (a stale tool definition must not
+        # block a call the real API accepts, e.g. a field the API grew before its definition did).
+        if isinstance(properties, dict) and base.input_schema.get("additionalProperties") is False:
             for key in keys:
                 if key not in properties:
                     listed = ", ".join(properties) or "none"
-                    raise _Fail(line, f"call to '{tool_name}' passes unknown property '{key}' (schema properties: {listed})")
+                    raise _Fail(
+                        line,
+                        f"call to '{tool_name}' passes unknown property '{key}' "
+                        f"(schema properties: {listed}; additionalProperties is false)",
+                    )
         required = base.input_schema.get("required")
         if isinstance(required, list):
             for prop in required:

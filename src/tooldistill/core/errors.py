@@ -74,3 +74,7 @@ class ReplayMismatchError(ToolDistillError):
 
 class LifecycleError(ToolDistillError):
     """A lifecycle operation cannot be carried out as requested (nothing to promote, live verification off, ...)."""
+
+
+class ConfigError(ToolDistillError):
+    """tooldistill.toml or the settings passed to ToolDistill are invalid."""

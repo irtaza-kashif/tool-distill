@@ -113,7 +113,6 @@ BAD = [
     ("kwargs_splat", body('    return call("gmail_search", **x)\n'), "uses **kwargs; pass explicit keyword arguments"),
     ("unknown_tool", body('    return call("billing_find_customr", name=x)\n'), "call to 'billing_find_customr' — no such base tool"),
     ("propose_tool", body('    return call("propose_distilled_tool", name=x)\n'), "no such base tool"),
-    ("unknown_property", body('    return call("gmail_search", query=x, sinse="1d")\n'), "passes unknown property 'sinse' (schema properties: query, since)"),
     ("missing_required", body('    return call("gmail_search", since=x)\n'), "is missing required property 'query'"),
     ("call_alias", body('    f = call\n    return f("gmail_search", query=x)\n'), "'call' may only be used as call("),
     ("rebind_call", body("    call = x\n    return call\n"), "rebinding 'call'"),
@@ -152,6 +151,16 @@ def test_bad_tools_fail_with_precise_messages(tools, source, expected):
     assert not result.passed
     assert expected in result.message, result.message
     assert result.dependencies == () and result.meta is None
+
+
+def test_unknown_keys_fail_only_when_the_schema_forbids_them(tools):
+    source = body('    return call("gmail_search", query=x, sinse="1d")\n')
+    assert static_check(source, tools=tools).passed  # the schema allows additional properties: replay decides
+    strict = sample_tools()
+    strict[0]["input_schema"]["additionalProperties"] = False
+    result = static_check(source, tools=ToolSet(strict))
+    assert not result.passed
+    assert "passes unknown property 'sinse' (schema properties: query, since; additionalProperties is false)" in result.message
 
 
 def test_failure_messages_name_the_line(tools):

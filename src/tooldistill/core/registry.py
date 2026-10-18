@@ -583,6 +583,19 @@ class Registry:
             )
             self._expect(cursor, f"version '{name}' v{version}")
 
+    def update_version_metadata(self, name: str, version: int, *, description: str, input_schema_json: str) -> None:
+        """Sync a version's description and schema from its decorator once the static check has read them."""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE versions SET description = ?, input_schema_json = ? WHERE tool_name = ? AND version = ?",
+                (description, input_schema_json, name, version),
+            )
+            self._expect(cursor, f"version '{name}' v{version}")
+
+    def versions_from_trace(self, trace_id: str) -> list[VersionRecord]:
+        rows = self._rows("SELECT * FROM versions WHERE source_trace_id = ? ORDER BY tool_name, version", (trace_id,))
+        return [_row_version(r) for r in rows]
+
     def set_measured_calls(self, name: str, version: int, measured_calls: int | None) -> None:
         with self.transaction() as conn:
             cursor = conn.execute(
