@@ -58,8 +58,11 @@ Mirrors the four demo steps of the SDK demo.
 
    ```
    uv run --project ../../.. tooldistill tool-updated invoice__billing_import_from_email
-   uv run --project ../../.. --env-file ../../../.env tooldistill rebuild <name>
+   uv run --project ../../.. --env-file ../../../.env tooldistill rebuild create_invoice_from_order_email
    ```
+
+   Claude chooses the tool's name; if yours differs, `uv run --project ../../.. tooldistill list` shows it. Type the
+   name out rather than a `<placeholder>`: PowerShell and cmd treat angle brackets as redirection and refuse the line.
 
    The first marks the tool suspect because an avoided tool recovered; the second asks Claude for a shorter version
    that uses it, verifies it live, and activates v2. The running plugin server notices the store change and tells
@@ -74,7 +77,7 @@ Inspect at any point, from this folder:
 
 ```
 uv run --project ../../.. tooldistill list
-uv run --project ../../.. tooldistill show <name>
+uv run --project ../../.. tooldistill show create_invoice_from_order_email
 uv run --project ../../.. tooldistill traces show <session id>
 ```
 
