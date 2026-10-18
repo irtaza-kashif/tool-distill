@@ -194,11 +194,14 @@ tooldistill rebuild <name>
 uv run python examples/invoice_agent/run.py --customer ACME --outage      # discovery -> proposal -> verified -> active
 uv run python examples/invoice_agent/run.py --customer Globex --outage    # one distilled call
 cd examples/invoice_agent
+uv run tooldistill list                                                   # the model picks the tool's name: read it here
 uv run tooldistill tool-updated billing_import_from_email                 # the outage is over: suspect, queued
-uv run tooldistill rebuild create_invoice_from_latest_order_email         # the distiller builds a shorter version
+uv run --env-file ../../.env tooldistill rebuild <name>                   # the distiller builds a shorter version
 cd ../..
 uv run python examples/invoice_agent/run.py --customer Initech --schema-currency   # structured error, fallback, new version
 ```
+
+The CLI reads its settings from `tooldistill.toml` in the current folder (or `--config`); it does not read `.env`. `rebuild` is the one command that calls the model, so it needs `ANTHROPIC_API_KEY` in the environment: `uv run --env-file ../../.env ...` loads it from the file, or set the variable in your shell.
 
 The scripted version of the same four steps runs in the test suite against a fake model, without the network.
 
