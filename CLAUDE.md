@@ -37,7 +37,7 @@ The product is a **library** (plus a thin CLI in the same package). It never run
 |---|---|
 | **Trace** | The recorded list of every tool call in a run: inputs, outputs, errors, latency, and (if reported) token usage. |
 | **Source trace** | The trace a distilled tool version was distilled from. Supplies its baseline, fixtures, and avoided tools. |
-| **Worth distilling** | A trace whose outcome is success, that has no proposal yet, made no *successful* distilled tool call, and made ≥ `min_calls_to_distill` base tool calls outside distilled tools. The threshold is waived when the trace contains a **failed** distilled tool call: that run is the source for the broken tool's next version. |
+| **Worth distilling** | A trace whose outcome is success and that has no proposal yet, and then either: it contains a **failed** distilled tool call (that run is the source for the broken tool's next version, whatever else it did), or it made no successful distilled tool call and made ≥ `min_calls_to_distill` base tool calls outside distilled tools. |
 | **Distillation** | Turning a successful trace into a distilled tool. |
 | **Distilled tool** | A Python function with a name, description, and input schema that completes a task by calling base tools in a fixed, known-good sequence. |
 | **`call()`** | The library helper a distilled tool must use for every base tool call. Routes to the executor (live mode) or fixtures (replay mode) and lets the library track dependencies. |
@@ -383,7 +383,7 @@ def run_agent(task: str, max_steps: int = 30):
 ```json
 {
   "name": "propose_distilled_tool",
-  "description": "Save the minimal sequence of tool calls that solved this task as a reusable tool. It will be verified before it can be used.",
+  "description": "Save the sequence of tool calls that solved this task, without its dead ends, as a reusable distilled tool. It will be verified before it can be used.",
   "input_schema": {
     "type": "object",
     "properties": {

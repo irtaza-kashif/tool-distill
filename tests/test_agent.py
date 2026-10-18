@@ -339,3 +339,40 @@ def test_explicit_distill_on_a_stored_trace(store):
     assert td.registry.list_tool_calls(trace.id)[-1].kind is CallKind.PROPOSE
     assert td.distill(trace.id).verified and td.registry.latest_version(NAME).version == 2
     td.close()
+
+
+def test_failed_distilled_call_outranks_a_successful_one(store):
+    """A run where a distilled tool both succeeded and failed is still the source of the broken tool's next version."""
+    created = []
+
+    def executor(name, args):
+        if name == "billing_create_invoice":
+            created.append(args)
+            if len(created) > 1:
+                raise RuntimeError("503 Service Unavailable")
+        return acme_executor(name, args)
+
+    td = make_td(store, executor)
+    activate_good_tool(td)
+    trace = td.start_trace("Invoice ACME twice")
+    assert not trace.execute(NAME, {"customer": "ACME"}).is_error
+    assert trace.execute(NAME, {"customer": "ACME"}).is_error
+    stats = td.registry.run_stats_for_trace(trace.id)
+    assert [s.success for s in stats] == [True, False]
+    trace.set_outcome(True)
+    assert trace.worth_distilling() and trace.failed_distilled_tool() == NAME
+    nudge = trace.distill_nudge()
+    assert nudge is not None and nudge.startswith(f"The distilled tool '{NAME}' failed in this run")
+    assert "Distilled tools that already exist" not in nudge  # the replacement goes under the same name
+    td.close()
+
+
+def test_nudge_names_existing_distilled_tools(td):
+    activate_good_tool(td)
+    trace = td.start_trace("Create a draft invoice for ACME from their most recent order email.")
+    run_discovery(trace)  # the model ignored the distilled tool and used base tools
+    trace.set_outcome(True)
+    nudge = trace.distill_nudge()
+    assert nudge is not None
+    assert f"Distilled tools that already exist: {NAME}. If one of them does this task, do not propose a duplicate" in nudge
+    assert "keep every step the task needed" in nudge and "Inputs are only what the request itself states" in nudge

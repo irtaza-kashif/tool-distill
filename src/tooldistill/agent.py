@@ -442,18 +442,19 @@ class Trace:
         return None
 
     def worth_distilling(self) -> bool:
-        """Outcome is success, no accepted proposal yet, no successful distilled call, and enough base calls
-        (the threshold is waived when a distilled tool failed: this run is the source of its next version)."""
+        """Outcome is success and no proposal yet; then either a distilled tool failed in this run (it is the
+        source of that tool's next version, whatever else the run did), or no distilled call succeeded and the
+        run made enough base calls."""
         if self._outcome is not True:
             return False
         registry = self._td.registry
         if registry.versions_from_trace(self.id):
             return False
         stats = registry.run_stats_for_trace(self.id)
-        if any(stat.success for stat in stats):
-            return False
         if any(not stat.success for stat in stats):
             return True
+        if any(stat.success for stat in stats):
+            return False
         return self._top_level_base_calls() >= self._td.settings.min_calls_to_distill
 
     def distill_nudge(self) -> str | None:
@@ -467,6 +468,7 @@ class Trace:
             base_calls=self._top_level_base_calls(),
             tool_names=self._td.tools.names,
             failed_tool=self.failed_distilled_tool(),
+            distilled_tools=[tool["name"] for tool in self._td.active_tools()],
         )
 
     def finish(self) -> IngestResult | None:

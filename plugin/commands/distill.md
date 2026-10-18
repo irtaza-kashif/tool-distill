@@ -13,6 +13,10 @@ The user confirms that the task just completed in this session went well. Turn i
 
 Name the tool after the kind of task it does, never after this run's particular inputs: a run that invoiced ACME yields `create_invoice_from_order_email` with a `customer` parameter, not `invoice_acme`. Parameterize what varies between similar tasks (the customer, the date range, ...) and hard-code nothing that was specific to this run.
 
+Inputs are only what the request itself states (a customer, a sender's name, a date range). Anything the run discovered through tools (a message id, an address, a price, a record found by searching) is derived inside the tool from the base tool outputs, never passed in. A tool whose inputs are the answer cannot be called before the work is done, so it never gets used.
+
+The tool does everything the task asked, including checks whose results do not change what gets created (a conflict check, a lookup the user wanted), and returns what the user needs to know (what was created, what the checks found). The saving comes from leaving out the dead ends, failed calls and repeated reads of the discovery run, never from dropping steps: a tool that does less than the task is not a shortcut and will not be used. A distilled tool is worth having when it turns a long search into a few calls; it does not have to be the shortest possible path.
+
 A distilled tool is one Python module. Example:
 
 from tooldistill import distilled_tool, call
