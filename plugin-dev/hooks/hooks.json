@@ -1,0 +1,91 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/..",
+              "--extra",
+              "plugin",
+              "tooldistill",
+              "hook",
+              "session-start"
+            ],
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/..",
+              "--extra",
+              "plugin",
+              "tooldistill",
+              "hook",
+              "post-tool-use"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/..",
+              "--extra",
+              "plugin",
+              "tooldistill",
+              "hook",
+              "post-tool-use-failure"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/..",
+              "--extra",
+              "plugin",
+              "tooldistill",
+              "hook",
+              "session-end"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

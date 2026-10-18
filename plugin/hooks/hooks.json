@@ -1,0 +1,79 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx",
+            "args": [
+              "--from",
+              "tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0",
+              "tooldistill",
+              "hook",
+              "session-start"
+            ],
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx",
+            "args": [
+              "--from",
+              "tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0",
+              "tooldistill",
+              "hook",
+              "post-tool-use"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx",
+            "args": [
+              "--from",
+              "tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0",
+              "tooldistill",
+              "hook",
+              "post-tool-use-failure"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx",
+            "args": [
+              "--from",
+              "tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0",
+              "tooldistill",
+              "hook",
+              "session-end"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

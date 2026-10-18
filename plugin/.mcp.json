@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "tooldistill": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0",
+        "tooldistill",
+        "serve"
+      ],
+      "alwaysLoad": true
+    }
+  }
+}
