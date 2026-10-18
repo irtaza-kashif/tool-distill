@@ -42,7 +42,7 @@ def main() -> int:
         else:
             print(f"absent   {store.relative_to(ROOT)}")
     for path, switches in SWITCH_FILES.items():
-        path.write_text(json.dumps(switches) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(switches) + "\n", encoding="utf-8", newline="\n")
         print(f"reset    {path.relative_to(ROOT)}")
     return 0
 
