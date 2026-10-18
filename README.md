@@ -201,13 +201,17 @@ tooldistill rebuild <name>
 
 ## Claude Code plugin
 
-The same library runs inside Claude Code as a plugin (`plugin/`, rendered by `scripts/render_plugin.py`; `plugin-dev/` runs this checkout). Hooks record the session's tool calls into a trace keyed by the session id, an MCP server offers `propose_distilled_tool` and the verified distilled tools, and `/tooldistill:distill` is how you confirm a task went well and ask for a tool. The project needs a `tooldistill.toml` whose base tools come from MCP servers (`mcp_config = ".mcp.json"`). Install with `claude plugin marketplace add irtaza-kashif/tool-distill` and `claude plugin install tooldistill@tooldistill`, or try the checkout with `claude --plugin-dir <checkout>/plugin-dev`. Details in `plugin/README.md`; a ready-made project to try it in, with the fake invoice tools served over MCP, is `examples/invoice_agent/claude_code/`.
+The same library runs inside Claude Code as a plugin (`plugin/`, rendered by `scripts/render_plugin.py`; `plugin-dev/` runs this checkout). Hooks record the session's tool calls into a trace keyed by the session id, an MCP server offers `propose_distilled_tool` and the verified distilled tools, and `/tooldistill:distill` is how you confirm a task went well and ask for a tool. The project needs a `tooldistill.toml` whose base tools come from MCP servers (`mcp_config = ".mcp.json"`). Install with `claude plugin marketplace add irtaza-kashif/tool-distill` and `claude plugin install tooldistill@tooldistill`, or try the checkout with `claude --plugin-dir <checkout>/plugin-dev`. Details in `plugin/README.md`; ready-made projects to try it in, with fake tools served over MCP, are `examples/invoice_agent/claude_code/` and `examples/incident_agent/claude_code/`.
 
 ## The store
 
 `.tooldistill/` holds a SQLite database (`registry.db`, WAL mode, safe for the agent process and the CLI at the same time) and the distilled tool files under `tools/<name>/v<N>.py`. The store's own `.gitignore` excludes the database: traces and fixtures contain real tool outputs, which may include personal data. The `.py` files may be committed.
 
-## Demo
+## Demos
+
+Two demos, both with fake tools and a real model. `examples/incident_agent/` is the hard one: an alert fires on a service whose upstream dependency just shipped a bad deploy, and the agent has to find it through paginated lists, hidden API rules and a one-call rollback that is down. A first run takes about 17 base tool calls and 160k model tokens; the distilled tool does it in one call with 9 inside, and the same four-step script (outage, reuse, `tool-updated` plus `rebuild`, schema change) runs through `examples/incident_agent/run.py --alert A-1042 --outage`, `--alert A-1057`, and `--schema-reason`. `docs/demo/video.md` has the shot list and the measured numbers. The invoice demo below is the simpler one.
+
+### The invoice demo
 
 `examples/invoice_agent/` has fake Gmail and billing tools (no real services), an outage switch and a schema-change switch, and a runner that uses a real model. Put `ANTHROPIC_API_KEY=...` in a `.env` file in the repository root, then:
 

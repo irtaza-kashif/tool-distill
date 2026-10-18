@@ -37,8 +37,9 @@ from tooldistill.core.config import load_config  # noqa: E402
 SYSTEM = (
     "You are an on-call operations assistant with tools for alerts, services, deploys, logs, metrics, approvals, "
     "incidents and chat. Complete the task with the tools, preferring the most direct path you can find: if one "
-    "tool completes a whole step in a single call, use it instead of several smaller tools. If a tool fails, read "
-    "its error message and work around it with the other tools. Timestamps are ISO 8601 in UTC; now is "
+    "tool completes the whole task or a whole step in a single call, call it first and use the other tools only "
+    "for what it did not do. If a tool fails, read its error message and work around it with the other tools. "
+    "Timestamps are ISO 8601 in UTC; now is "
     f"{incidents.NOW.strftime('%Y-%m-%dT%H:%M:%SZ')}. When the task is done, reply with one line stating what you did."
 )
 

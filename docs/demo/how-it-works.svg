@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="1600" height="900" fill="#f7f7f5"/>
+  <text x="800" y="70" text-anchor="middle" font-size="40" font-weight="600" fill="#1f2328">the agent proposes, the library verifies</text>
+
+  <!-- the developer's loop -->
+  <rect x="60" y="140" width="420" height="200" rx="14" fill="#ffffff" stroke="#1f2328" stroke-width="3"/>
+  <text x="270" y="185" text-anchor="middle" font-size="30" font-weight="600" fill="#1f2328">your agent loop</text>
+  <text x="270" y="230" text-anchor="middle" font-size="24" fill="#444">model → tool calls → results</text>
+  <text x="270" y="268" text-anchor="middle" font-size="24" fill="#444">trace.execute(name, input)</text>
+  <text x="270" y="306" text-anchor="middle" font-size="24" fill="#444">you decide the outcome</text>
+
+  <!-- arrow to the trace -->
+  <line x1="480" y1="240" x2="600" y2="240" stroke="#1f2328" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <!-- the trace -->
+  <rect x="600" y="160" width="300" height="160" rx="14" fill="#e8f0fe" stroke="#1a56db" stroke-width="3"/>
+  <text x="750" y="205" text-anchor="middle" font-size="30" font-weight="600" fill="#1a56db">trace</text>
+  <text x="750" y="245" text-anchor="middle" font-size="22" fill="#333">every call recorded:</text>
+  <text x="750" y="278" text-anchor="middle" font-size="22" fill="#333">inputs, outputs, errors, time</text>
+
+  <!-- three routes -->
+  <line x1="750" y1="320" x2="750" y2="400" stroke="#1f2328" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="750" y="440" text-anchor="middle" font-size="26" fill="#1f2328">routes by name</text>
+
+  <rect x="80" y="480" width="400" height="120" rx="14" fill="#ffffff" stroke="#1f2328" stroke-width="3"/>
+  <text x="280" y="528" text-anchor="middle" font-size="28" font-weight="600" fill="#1f2328">base tool</text>
+  <text x="280" y="568" text-anchor="middle" font-size="22" fill="#444">your executor runs it</text>
+
+  <rect x="600" y="480" width="400" height="120" rx="14" fill="#ffffff" stroke="#1f2328" stroke-width="3"/>
+  <text x="800" y="528" text-anchor="middle" font-size="28" font-weight="600" fill="#1f2328">distilled tool</text>
+  <text x="800" y="568" text-anchor="middle" font-size="22" fill="#444">one call, the known-good sequence</text>
+
+  <rect x="1120" y="480" width="400" height="120" rx="14" fill="#fff4e5" stroke="#b7791f" stroke-width="3"/>
+  <text x="1320" y="528" text-anchor="middle" font-size="28" font-weight="600" fill="#8a5a0b">proposal</text>
+  <text x="1320" y="568" text-anchor="middle" font-size="22" fill="#444">the model writes the tool</text>
+
+  <line x1="700" y1="450" x2="300" y2="478" stroke="#1f2328" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="750" y1="450" x2="790" y2="478" stroke="#1f2328" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="800" y1="450" x2="1300" y2="478" stroke="#1f2328" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- the verifier -->
+  <line x1="1320" y1="600" x2="1320" y2="650" stroke="#1f2328" stroke-width="4" marker-end="url(#arrow)"/>
+  <rect x="1040" y="650" width="560" height="120" rx="14" fill="#e6f4ea" stroke="#1e7e34" stroke-width="3"/>
+  <text x="1320" y="695" text-anchor="middle" font-size="28" font-weight="600" fill="#1e7e34">verifier: static → replay → efficiency</text>
+  <text x="1320" y="738" text-anchor="middle" font-size="22" fill="#333">AST rules · recorded responses · fewer calls than the run</text>
+
+  <!-- the lifecycle -->
+  <line x1="1040" y1="710" x2="960" y2="710" stroke="#1f2328" stroke-width="4" marker-end="url(#arrow)"/>
+  <rect x="300" y="650" width="660" height="120" rx="14" fill="#ffffff" stroke="#1f2328" stroke-width="3"/>
+  <text x="630" y="695" text-anchor="middle" font-size="28" font-weight="600" fill="#1f2328">lifecycle, driven by evidence</text>
+  <text x="630" y="738" text-anchor="middle" font-size="22" fill="#444">draft → verified → active → suspect → deprecated</text>
+
+  <!-- the store -->
+  <line x1="300" y1="710" x2="240" y2="710" stroke="#1f2328" stroke-width="4" marker-end="url(#arrow)"/>
+  <rect x="40" y="650" width="200" height="120" rx="14" fill="#ffffff" stroke="#1f2328" stroke-width="3"/>
+  <text x="140" y="695" text-anchor="middle" font-size="26" font-weight="600" fill="#1f2328">store</text>
+  <text x="140" y="738" text-anchor="middle" font-size="20" fill="#444">SQLite + tools/*.py</text>
+
+  <!-- the CLI and plugin -->
+  <text x="800" y="830" text-anchor="middle" font-size="24" fill="#444">same store, from the terminal: tooldistill list · show · verify · promote · tool-updated · rebuild</text>
+  <text x="800" y="868" text-anchor="middle" font-size="24" fill="#444">same library inside Claude Code: hooks record, /tooldistill:distill proposes, an MCP server offers the tools back</text>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2328"/>
+    </marker>
+  </defs>
+</svg>
