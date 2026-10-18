@@ -5,11 +5,29 @@ description = "Turn an agent's trial-and-error runs into verified, reusable dist
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Irtaza Kashif", email = "irtaza.kashif@gmail.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["agents", "llm", "tools", "mcp", "claude", "anthropic", "distillation", "verification"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 dependencies = [
     "anthropic>=1.0",
     "typer>=0.15",
     "jsonschema>=4.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/irtaza-kashif/tool-distill"
+Repository = "https://github.com/irtaza-kashif/tool-distill"
+Issues = "https://github.com/irtaza-kashif/tool-distill/issues"
 
 [project.optional-dependencies]
 plugin = ["mcp>=2.3,<3"]
