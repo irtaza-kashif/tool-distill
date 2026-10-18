@@ -1,0 +1,12 @@
+store = ".tooldistill"
+executor = "tools:execute_tool"
+tools = "tools:TOOLS"
+health_probe = "tools:probe"
+distiller_model = "claude-sonnet-5-5"
+fallback_distiller = true
+auto_promote = true                 # a smoother demo: verified tools go active at once
+min_calls_to_distill = 4            # fallback and re-verification runs are short
+min_call_reduction = 0.3
+max_exposed_tools = 20
+allow_live_verification = true      # the base tools are fake, so live verification is safe
+check_schemas_on_start = true

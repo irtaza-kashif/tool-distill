@@ -210,9 +210,16 @@ class Trace:
         self._td.registry.add_usage(self.id, _usage_field(usage, "input_tokens"), _usage_field(usage, "output_tokens"))
 
     def set_outcome(self, success: bool) -> None:
-        """Record whether the task was actually accomplished. Decided by the developer's code."""
+        """Record whether the task was actually accomplished. Decided by the developer's code.
+
+        The model may call the propose tool mid-run, before the outcome is known. A tool distilled from a
+        run that then failed is deprecated: it is only as good as the run it came from.
+        """
         self._outcome = bool(success)
         self._td.registry.set_outcome(self.id, self._outcome)
+        if not self._outcome:
+            for version in self._td.registry.versions_from_trace(self.id):
+                lifecycle.deprecate(self._td.registry, version.tool_name, version.version, "source_run_failed")
 
     # ------------------------------------------------------------------------- execute
 

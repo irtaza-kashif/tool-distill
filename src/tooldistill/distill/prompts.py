@@ -44,7 +44,7 @@ Rules (a static check enforces them before anything runs; a broken rule is repor
 
 PROPOSE_TOOL_DESCRIPTION = (
     "Save the minimal sequence of tool calls that solved this task as a reusable tool. It will be verified "
-    "before it can be used: the module is checked statically, replayed against this run's recorded tool "
+    "before it can be used. Call it once the task is done: the module is checked statically, replayed against this run's recorded tool "
     "responses with your test_inputs, and must use clearly fewer base tool calls than this run did. "
     "The result tells you the verdict; fix the module and call again if it is rejected.\n\n" + FILE_FORMAT_RULES
 )

@@ -14,3 +14,11 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Secrets: the demo runner reads ANTHROPIC_API_KEY from .env (see .env.example). Never commit it.
+.env
+.env.*
+!.env.example
+
+# The demo's own store (recreated by running examples/invoice_agent/run.py)
+examples/**/.tooldistill/

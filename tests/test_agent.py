@@ -225,6 +225,21 @@ def test_propose_flow_through_the_trace(td):
     assert trace.finish() is None
 
 
+def test_versions_from_a_failed_run_are_deprecated(store):
+    td = make_td(store, auto_promote=True)
+    trace = td.start_trace("Invoice ACME")
+    run_discovery(trace)
+    out = trace.execute(PROPOSE_TOOL_NAME, PROPOSAL_PAYLOAD)  # proposed mid-run, before the outcome is known
+    assert not out.is_error and td.registry.get_version(NAME, 1).status is Status.ACTIVE
+    trace.set_outcome(False)
+    version = td.registry.get_version(NAME, 1)
+    assert (version.status, version.status_reason) == (Status.DEPRECATED, "source_run_failed")
+    assert td.active_tools() == [] and not trace.worth_distilling()
+    trace.set_outcome(False)  # idempotent: already deprecated
+    assert td.registry.list_status_events(NAME, 1)[-1].reason == "source_run_failed"
+    td.close()
+
+
 def test_propose_with_invalid_payload(td):
     trace = td.start_trace("t")
     out = trace.execute(PROPOSE_TOOL_NAME, {"name": NAME})
