@@ -91,8 +91,24 @@ def _content(value: Any) -> str:
 # ------------------------------------------------------------------- the loop with tooldistill
 
 
+def _terse(log):
+    """Print the shared loop's log lines in the same shape as the plain loop's: the tool and whether it worked."""
+    if log is None:
+        return None
+
+    def write(line: str) -> None:
+        if line.startswith("propose_distilled_tool") or line.startswith("nudge"):
+            log(f"  {line[:170]}")
+        elif " -> " in line:
+            log(f"  {line.split(': ', 1)[0]}")
+        else:
+            log(f"  {line}")
+
+    return write
+
+
 def run_with(td: ToolDistill, client: Any, task: str, *, model: str, max_steps: int, log=None) -> Measure:
-    report = run_agent(td, client, task, model=model, max_steps=max_steps, system=SYSTEM, task_succeeded=incidents.task_succeeded, log=log)
+    report = run_agent(td, client, task, model=model, max_steps=max_steps, system=SYSTEM, task_succeeded=incidents.task_succeeded, log=_terse(log))
     note = ""
     calls = td.registry.list_tool_calls(report.trace_id)
     for call in calls:
@@ -168,7 +184,7 @@ def table(results: dict[str, list[Measure]]) -> str:
         cells = []
         for m in results[label]:
             inner = f" (+{m.inner_calls} inside)" if m.inner_calls else ""
-            cells.append(f"{m.calls} calls{inner}, {m.tokens / 1000:.0f}k tok, {m.seconds:.0f}s")
+            cells.append(f"{m.calls} call{'s' if m.calls != 1 else ''}{inner}, {m.tokens / 1000:.0f}k tok, {m.seconds:.0f}s")
         lines.append(f"{title:<22}" + "".join(f"{c:>36}" for c in cells))
     first, last = results["with"][0], results["with"][-1]
     if last.tokens and last.seconds:

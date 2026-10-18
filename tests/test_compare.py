@@ -53,5 +53,5 @@ def test_comparison_runs_both_rows_and_prints_the_table(tmp_path, clean_world):
     assert second.calls == 1 and second.inner_calls == 10 and second.outcome and "called the distilled tool 1x" in second.note
     text = compare.table(results)
     assert "without tooldistill" in text and "with tooldistill" in text
-    assert "1 calls (+10 inside)" in text and "x fewer model tokens" in text
+    assert "1 call (+10 inside)" in text and "x fewer model tokens" in text
     assert not (tmp_path / ".tooldistill_compare" / "registry.db").exists() or True  # the store is the script's own
