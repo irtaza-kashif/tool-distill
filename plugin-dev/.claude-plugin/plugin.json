@@ -1,6 +1,6 @@
 {
   "name": "tooldistill",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Verified, reusable distilled tools built from your own successful runs: records the MCP tool calls of a session, turns a solved task into a tool with /tooldistill:distill, verifies it before Claude can use it, and keeps it current when the tools underneath change.",
   "author": {
     "name": "irtaza-kashif"

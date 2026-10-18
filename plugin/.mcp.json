@@ -5,7 +5,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "tooldistill[plugin]==0.1.0",
+        "tooldistill[plugin]==0.1.1",
         "tooldistill",
         "serve"
       ],
