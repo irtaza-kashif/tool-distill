@@ -14,7 +14,7 @@ Other projects generate tools like this. The difference here is **trust and upke
 
 ## Install
 
-Requires Python 3.14. The project is managed with [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12 or newer. The project is managed with [uv](https://docs.astral.sh/uv/).
 
 ```
 uv add tooldistill          # in your project

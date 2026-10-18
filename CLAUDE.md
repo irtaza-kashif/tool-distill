@@ -92,7 +92,7 @@ The product is a **library** (plus a thin CLI in the same package). It never run
 
 ## Tech stack and conventions
 
-- Python **3.14**, managed with **uv** (`requires-python = ">=3.14"`; pin with `uv python pin 3.14`). Package layout under `src/tooldistill/`. Modern syntax is fine (e.g. `type` aliases, PEP 695 generics, `X | None`).
+- Python **3.12 or newer** (`requires-python = ">=3.12"`; development runs on 3.14, pinned with `uv python pin 3.14`), managed with **uv**. Package layout under `src/tooldistill/`. Syntax up to 3.12 is fine (`type` aliases, PEP 695 generics, `X | None`); nothing newer than 3.12 from the standard library (no `uuid.uuid7`, `copy.replace`, `warnings.deprecated`). The suite must pass on 3.12, 3.13 and 3.14.
 - Dependencies: `anthropic` (ClaudeDistiller), `typer` (CLI), `jsonschema` (schema validation). Storage uses stdlib `sqlite3`. Keep dependencies minimal.
 - Tests: `pytest`. **No network in tests.** Mock the Anthropic client; use in-process fake base tools.
 - Full type hints; `dataclasses` for internal models.

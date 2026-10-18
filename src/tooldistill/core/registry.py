@@ -6,7 +6,6 @@ transaction is ever held open across either.
 
 import sqlite3
 import threading
-import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,7 +29,7 @@ from tooldistill.core.models import (
     TraceRecord,
     VersionRecord,
 )
-from tooldistill.core.serialization import code_hash, now_iso
+from tooldistill.core.serialization import code_hash, now_iso, new_trace_id
 
 __all__ = ["DB_FILENAME", "GITIGNORE_TEXT", "SCHEMA_VERSION", "TOOLS_DIRNAME", "Registry"]
 
@@ -348,7 +347,7 @@ class Registry:
     # ------------------------------------------------------------------- traces
 
     def create_trace(self, task: str, *, trace_id: str | None = None) -> TraceRecord:
-        tid = trace_id or uuid.uuid7().hex
+        tid = trace_id or new_trace_id()
         now = now_iso()
         with self.transaction() as conn:
             conn.execute("INSERT INTO traces (id, task, started_at) VALUES (?, ?, ?)", (tid, task, now))

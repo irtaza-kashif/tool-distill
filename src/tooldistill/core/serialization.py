@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import secrets
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +46,18 @@ def code_hash(code: str) -> str:
 def now_iso() -> str:
     """UTC timestamp with millisecond precision; sorts lexicographically."""
     return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def new_trace_id() -> str:
+    """A 32-character hex id in the UUIDv7 layout: a millisecond timestamp first, then random bits.
+
+    Ids therefore sort by creation time. ``uuid.uuid7()`` would do the same but exists only from Python 3.14.
+    """
+    millis = time.time_ns() // 1_000_000
+    rand_a = secrets.randbits(12)
+    rand_b = secrets.randbits(62)
+    value = (millis << 80) | (0x7 << 76) | (rand_a << 64) | (0b10 << 62) | rand_b
+    return f"{value:032x}"
 
 
 # JSON Schema keywords whose value is a map of *names* to schemas (keys must not be touched).

@@ -103,3 +103,13 @@ def test_schema_hash_changes_with_structure():
     retyped_prop["properties"]["description"]["type"] = "integer"
     assert schema_hash(retyped_prop) != base
     assert len(base) == 64
+
+
+def test_new_trace_id_is_hex_and_time_ordered():
+    from tooldistill.core.serialization import new_trace_id
+
+    ids = [new_trace_id() for _ in range(50)]
+    assert all(len(i) == 32 and int(i, 16) >= 0 for i in ids)
+    assert len(set(ids)) == 50
+    assert ids == sorted(ids) or ids[0][:12] == ids[-1][:12]  # same millisecond, or strictly increasing by time
+    assert ids[0][12] == "7"  # version nibble of the UUIDv7 layout
