@@ -1,13 +1,21 @@
 """Text the agent reads: the file format rules, the nudge, and the propose tool definition."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from tooldistill.core.proposals import PROPOSE_TOOL_INPUT_SCHEMA
 from tooldistill.core.tools import PROPOSE_TOOL_NAME
 
-__all__ = ["FILE_FORMAT_RULES", "NAMING_GUIDANCE", "PROPOSE_TOOL_DESCRIPTION", "nudge", "propose_tool"]
+__all__ = [
+    "FILE_FORMAT_RULES",
+    "NAMING_GUIDANCE",
+    "PLUGIN_PROPOSE_DESCRIPTION",
+    "PROPOSE_TOOL_DESCRIPTION",
+    "distill_command_body",
+    "nudge",
+    "plugin_session_context",
+    "propose_tool",
+]
 
 FILE_FORMAT_RULES = '''A distilled tool is one Python module. Example:
 
@@ -62,11 +70,68 @@ PROPOSE_TOOL_DESCRIPTION = (
 
 def propose_tool() -> dict[str, Any]:
     """The ``propose_distilled_tool`` definition, as a fresh Anthropic tool dict."""
+    from tooldistill.core.proposals import PROPOSE_TOOL_INPUT_SCHEMA  # kept lazy: hooks import this module
+
     return {
         "name": PROPOSE_TOOL_NAME,
         "description": PROPOSE_TOOL_DESCRIPTION,
         "input_schema": deepcopy(PROPOSE_TOOL_INPUT_SCHEMA),
     }
+
+
+# --------------------------------------------------------------------- Claude Code plugin
+
+PLUGIN_PROPOSE_DESCRIPTION = (
+    "Save the minimal sequence of MCP tool calls that solved the task just completed as a verified, reusable "
+    "distilled tool. Use it after the /tooldistill:distill command, which gives the full rules. Pass the "
+    "session's trace_id from the session context; the proposal is replayed against that session's recorded "
+    "tool calls and must use clearly fewer calls. The result is the verdict; fix the module and call again if "
+    "it is rejected."
+)
+
+SESSION_CONTEXT_LIMIT = 10_000
+
+
+def plugin_session_context(trace_id: str, tools: Sequence[Mapping[str, Any]], *, prefix: str) -> str:
+    """What the SessionStart hook adds to Claude's context (facts, not instructions; under 10,000 characters)."""
+    lines = [
+        f"tooldistill is active for this project. The trace id of this session is {trace_id}.",
+        f"The tooldistill MCP server offers tools named {prefix}<tool>. Each of them takes a trace_id "
+        f"parameter; the value for this session is {trace_id}. Its propose_distilled_tool saves a completed "
+        "multi-step task as a verified distilled tool; the /tooldistill:distill command explains how.",
+    ]
+    if tools:
+        lines.append("Distilled tools available now (each completes a whole task in one call):")
+        for tool in tools:
+            lines.append(f"- {prefix}{tool['name']}: {str(tool.get('description', '')).strip()}")
+    else:
+        lines.append("No distilled tools exist yet.")
+    text = "\n".join(lines)
+    if len(text) > SESSION_CONTEXT_LIMIT:
+        text = text[: SESSION_CONTEXT_LIMIT - 20] + "\n(list truncated)"
+    return text
+
+
+def distill_command_body(*, prefix: str) -> str:
+    """The body of the plugin's /tooldistill:distill command (Markdown)."""
+    return "\n".join(
+        [
+            "The user confirms that the task just completed in this session went well. Turn it into a distilled tool:",
+            "",
+            f"1. Call `{prefix}{PROPOSE_TOOL_NAME}` once, with `trace_id` set to this session's trace id from the session "
+            'context and `task` set to "$ARGUMENTS" (or a one-line description of the task if no arguments were given).',
+            "2. Give the tool a short snake_case name, a one-sentence description, an input_schema for the inputs that vary "
+            "between similar tasks, the Python module, and test_inputs: the arguments that reproduce exactly this session's run.",
+            "3. Inside the module, `call()` may only use the base tools this session called through MCP, named "
+            "`<server>__<tool>` (the MCP tool `mcp__invoice__gmail_search` is `invoice__gmail_search`). Built-in tools "
+            "such as Bash, Read or Edit can never be part of a distilled tool.",
+            "4. If the verdict is a rejection, fix the module and call the tool again, at most twice.",
+            "",
+            NAMING_GUIDANCE,
+            "",
+            FILE_FORMAT_RULES,
+        ]
+    )
 
 
 def nudge(task: str, *, base_calls: int, tool_names: Sequence[str], failed_tool: str | None = None) -> str:

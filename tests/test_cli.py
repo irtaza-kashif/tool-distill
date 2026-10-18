@@ -243,6 +243,82 @@ def test_mcp_tools_command(tmp_path: Path, project: Path):
     assert missing.exit_code == 1 and "config file not found" in missing.output
 
 
+@pytest.mark.anyio
+async def test_serve_over_stdio(tmp_path: Path):
+    """`tooldistill serve` as a real subprocess, driven by the MCP SDK client; the fake invoice server runs underneath."""
+    import sys
+
+    import anyio
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+    from mcp.types import ToolListChangedNotification
+
+    from tooldistill.core.models import Status
+
+    server = Path(__file__).resolve().parents[1] / "examples" / "invoice_agent" / "mcp_server.py"
+    folder = tmp_path / "plugin_project"
+    folder.mkdir()
+    (folder / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"invoice": {"type": "stdio", "command": sys.executable, "args": [str(server)]}}}), encoding="utf-8"
+    )
+    toml = folder / "tooldistill.toml"
+    toml.write_text('store = ".tooldistill"\nmcp_config = ".mcp.json"\nauto_promote = true\nallow_live_verification = true\nfallback_distiller = false\n', encoding="utf-8")
+    registry = Registry(folder / ".tooldistill")
+    code = (
+        "from tooldistill import distilled_tool, call\n\n\n"
+        '@distilled_tool(name="import_latest_order", description="Import the latest order email as a draft invoice.", '
+        'input_schema={"type": "object", "properties": {"customer": {"type": "string"}}, "required": ["customer"]})\n'
+        "def import_latest_order(customer: str) -> dict:\n"
+        '    messages = call("invoice__gmail_search", query=f"from:{customer} order")\n'
+        '    return call("invoice__billing_import_from_email", message_id=messages[0]["id"])\n'
+    )
+    registry.create_version(name="import_latest_order", description="Import the latest order email as a draft invoice.", input_schema_json='{"type":"object","properties":{"customer":{"type":"string"}},"required":["customer"]}', code=code, test_inputs_json='{"customer":"ACME"}', source_trace_id=None, baseline_calls=6)
+    registry.set_measured_calls("import_latest_order", 1, 2)
+    registry.set_status("import_latest_order", 1, Status.ACTIVE, "promoted")
+    registry.ensure_trace("sess-stdio", "Claude Code session in the test")
+    registry.close()
+
+    notifications: list[str] = []
+
+    async def on_message(message):
+        if isinstance(message, ToolListChangedNotification):
+            notifications.append("tools")
+
+    params = StdioServerParameters(command=sys.executable, args=["-c", "from tooldistill.cli import app; app()", "serve", "--config", str(toml), "--poll-interval", "0.2"])
+    with anyio.fail_after(120):
+        async with stdio_client(params) as (read, write), ClientSession(read, write, read_timeout_seconds=90, message_handler=on_message) as client:
+            init = await client.initialize()
+            assert init.capabilities.tools is not None and init.capabilities.tools.list_changed is True
+            listed = await client.list_tools()
+            assert [t.name for t in listed.tools] == ["propose_distilled_tool", "import_latest_order"]
+            assert "trace_id" in listed.tools[1].input_schema["properties"]
+            result = await client.call_tool("import_latest_order", {"customer": "ACME", "trace_id": "sess-stdio"})
+            assert not result.is_error, result.content
+            assert json.loads(result.content[0].text)["customer_id"] == "cust_acme"
+            rejected = await client.call_tool("propose_distilled_tool", {"name": "x", "description": "d", "input_schema": {}, "code": "x", "test_inputs": {}, "trace_id": "ghost"})
+            assert rejected.is_error and "unknown trace id 'ghost'" in rejected.content[0].text
+            # a change made by "the CLI" in another process is noticed by the watcher and announced
+            other = Registry(folder / ".tooldistill")
+            from tooldistill.core import lifecycle
+
+            lifecycle.deprecate(other, "import_latest_order", 1)
+            other.close()
+            for _ in range(50):
+                await anyio.sleep(0.2)
+                if notifications:
+                    break
+            assert notifications, "no tools/list_changed notification arrived"
+            listed = await client.list_tools()
+            assert [t.name for t in listed.tools] == ["propose_distilled_tool"]
+    registry = Registry(folder / ".tooldistill")
+    try:
+        calls = registry.list_tool_calls("sess-stdio")
+        assert [c.tool_name for c in calls] == ["import_latest_order", "invoice__gmail_search", "invoice__billing_import_from_email"]
+        assert [c.kind.value for c in calls] == ["distilled", "base", "base"] and calls[1].parent_call_id == calls[0].id
+    finally:
+        registry.close()
+
+
 def test_read_only_commands_do_not_import_the_executor(project: Path, monkeypatch):
     registry = seed(project)
     registry.close()

@@ -10,6 +10,7 @@ from typing import Any
 from tooldistill.core.config import Settings
 from tooldistill.core.errors import InvalidTransition, LifecycleError
 from tooldistill.core.models import (
+    EXPOSED_SUSPECT_REASONS,
     REASON_AVOIDED_TOOL_RECOVERED,
     REASON_DEPENDENCY_CHANGED,
     REASON_NEEDS_LIVE_VERIFICATION,
@@ -61,10 +62,6 @@ ALLOWED_TRANSITIONS: frozenset[tuple[Status, Status]] = frozenset(
         (Status.DEPRECATED, Status.ACTIVE),  # rollback after re-passing verification
     }
 )
-
-# Suspect versions with these reasons still work and stay exposed.
-EXPOSED_SUSPECT_REASONS: tuple[str, ...] = (REASON_AVOIDED_TOOL_RECOVERED,)
-
 
 # ------------------------------------------------------------------------------ transitions
 

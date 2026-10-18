@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from tooldistill.core.tools import ToolSet
 
 __all__ = [
+    "EXPOSED_SUSPECT_REASONS",
     "REASON_AVOIDED_TOOL_RECOVERED",
     "REASON_DEPENDENCY_CHANGED",
     "REASON_NEEDS_LIVE_VERIFICATION",
@@ -62,6 +63,9 @@ REASON_NEEDS_LIVE_VERIFICATION = "needs_live_verification"
 REASON_DEPENDENCY_CHANGED = "dependency_changed"
 REASON_RUNTIME_FAILURE = "runtime_failure"
 REASON_AVOIDED_TOOL_RECOVERED = "avoided_tool_recovered"
+
+# Suspect versions with these reasons still work and stay exposed to the agent.
+EXPOSED_SUSPECT_REASONS: tuple[str, ...] = (REASON_AVOIDED_TOOL_RECOVERED,)
 
 
 @dataclass(frozen=True, slots=True)

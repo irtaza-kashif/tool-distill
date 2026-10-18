@@ -277,9 +277,9 @@ class Trace:
         self._td = td
         self.id = record.id
         self.task = record.task
-        self._outcome: bool | None = None
-        self._nudged = False
-        self._finished = False
+        self._outcome: bool | None = record.outcome
+        self._nudged = record.nudged
+        self._finished = record.finished_at is not None
         self.distill_result: IngestResult | None = None
 
     @property

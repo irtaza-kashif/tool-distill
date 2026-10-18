@@ -405,6 +405,49 @@ def health(
         td.close()
 
 
+PluginConfigOpt = Annotated[
+    Path | None,
+    typer.Option("--config", "-c", help="Path to tooldistill.toml (default: $TOOLDISTILL_CONFIG, then $CLAUDE_PROJECT_DIR, then ./)."),
+]
+
+
+@app.command()
+def serve(
+    config: PluginConfigOpt = None,
+    poll_interval: Annotated[float, typer.Option("--poll-interval", help="Seconds between checks for store changes made by the CLI.")] = 2.0,
+) -> None:
+    """Run the Claude Code plugin's MCP server over stdio (distilled tools plus propose_distilled_tool)."""
+    from tooldistill.integrations.claude_code.server import serve as run_server
+
+    run_server(config, poll_interval=poll_interval)
+
+
+@app.command()
+def hook(
+    event: Annotated[str, typer.Argument(help="session-start, post-tool-use, post-tool-use-failure or session-end.")],
+    config: PluginConfigOpt = None,
+) -> None:
+    """Handle one Claude Code hook event; the hook's JSON payload is read from stdin."""
+    import sys
+
+    from tooldistill.integrations.claude_code.hooks import handle_hook
+
+    raw = sys.stdin.read()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError as exc:
+        _fail(f"invalid hook JSON on stdin: {exc}")
+    if not isinstance(payload, dict):
+        _fail("the hook payload must be a JSON object")
+    result = handle_hook(event, payload, config=config)
+    if result.stdout:
+        typer.echo(result.stdout, nl=False)
+    if result.stderr:
+        typer.echo(result.stderr, err=True)
+    if result.exit_code:
+        raise typer.Exit(code=result.exit_code)
+
+
 @app.command()
 def rebuild(
     name: Annotated[str, typer.Argument(help="Distilled tool name with an open rebuild item.")],

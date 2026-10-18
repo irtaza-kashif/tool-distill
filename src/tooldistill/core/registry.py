@@ -354,6 +354,24 @@ class Registry:
             conn.execute("INSERT INTO traces (id, task, started_at) VALUES (?, ?, ?)", (tid, task, now))
         return TraceRecord(tid, task, now, None, None, 0, 0, False)
 
+    def ensure_trace(self, trace_id: str, task: str) -> TraceRecord:
+        """The trace with this id, created with ``task`` if it does not exist yet (Claude Code sessions)."""
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO traces (id, task, started_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                (trace_id, task, now_iso()),
+            )
+        return self.require_trace(trace_id)
+
+    def set_task(self, trace_id: str, task: str) -> None:
+        with self.transaction() as conn:
+            self._expect(conn.execute("UPDATE traces SET task = ? WHERE id = ?", (task, trace_id)), f"trace '{trace_id}'")
+
+    def latest_open_trace(self) -> TraceRecord | None:
+        """The most recently started trace that has not been finished."""
+        row = self._row("SELECT * FROM traces WHERE finished_at IS NULL ORDER BY started_at DESC, id DESC LIMIT 1")
+        return None if row is None else _row_trace(row)
+
     def get_trace(self, trace_id: str) -> TraceRecord | None:
         row = self._row("SELECT * FROM traces WHERE id = ?", (trace_id,))
         return None if row is None else _row_trace(row)
