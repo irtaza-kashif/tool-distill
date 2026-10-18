@@ -87,7 +87,7 @@ class ToolDistill:
             config.store,
             config.load_executor(),
             config.load_tools(),
-            distiller=distiller,
+            distiller=distiller if distiller is not None else config.load_distiller(),
             health_probe=config.load_health_probe(),
             **settings,
         )
@@ -147,6 +147,26 @@ class ToolDistill:
             executor=self.executor,
             health_probe=self.health_probe,
             rebuild_of=rebuild_of,
+        )
+
+    # ------------------------------------------------------------------- lifecycle
+
+    def promote(self, name: str, version: int | None = None, *, live: bool = False) -> lifecycle.PromoteResult:
+        """Activate a version (the highest verified one by default); re-verifies first when needed."""
+        return lifecycle.promote(
+            self.registry, self.tools, self.settings, name, version, executor=self.executor, live=live, health_probe=self.health_probe
+        )
+
+    def deprecate(self, name: str, version: int | None = None, reason: str = "manual") -> VersionRecord | None:
+        """Deprecate a version (the exposed one by default, else the latest); None when it already was."""
+        record = lifecycle.select_version(self.registry, name, version)
+        return lifecycle.deprecate(self.registry, name, record.version, reason)
+
+    def verify(self, name: str, version: int | None = None, *, live: bool = False) -> tuple[VersionRecord, Any]:
+        """Re-run the three checks on a version and apply the outcome; ``live`` runs every call live."""
+        record = lifecycle.select_version(self.registry, name, version)
+        return lifecycle.reverify(
+            self.registry, self.tools, self.settings, record, executor=self.executor, live=live, health_probe=self.health_probe
         )
 
     # ------------------------------------------------------------ base tool changes

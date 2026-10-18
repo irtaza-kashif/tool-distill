@@ -41,6 +41,7 @@ __all__ = [
     "promote",
     "reverify",
     "runnable_version",
+    "select_version",
     "transition",
 ]
 
@@ -303,6 +304,19 @@ def runnable_version(registry: Registry, name: str) -> VersionRecord | None:
         if is_exposable(candidate):
             return candidate
     return None
+
+
+def select_version(registry: Registry, name: str, version: int | None = None) -> VersionRecord:
+    """The version a command means: the given number, else the exposed version, else the latest."""
+    if version is not None:
+        return registry.require_version(name, version)
+    exposed = runnable_version(registry, name)
+    if exposed is not None:
+        return exposed
+    latest = registry.latest_version(name)
+    if latest is None:
+        raise LifecycleError(f"unknown distilled tool '{name}'")
+    return latest
 
 
 # ------------------------------------------------------------------ base tool changes

@@ -17,6 +17,7 @@ __all__ = [
     "Config",
     "Settings",
     "import_string",
+    "init_config",
     "load_config",
 ]
 
@@ -26,6 +27,7 @@ SAMPLE_CONFIG = """store = ".tooldistill"
 executor = "myapp.tools:execute_tool"      # imported by the CLI: execute_tool(name, args) -> Any
 tools = "myapp.tools:TOOLS"                # list of Anthropic-format tool dicts
 # health_probe = "myapp.tools:probe"       # optional: probe(tool_name) -> bool
+# distiller = "myapp.distill:DISTILLER"    # optional: a custom Distiller (instance or factory) instead of ClaudeDistiller
 distiller_model = "claude-sonnet-5-5"
 fallback_distiller = true
 auto_promote = false
@@ -110,6 +112,18 @@ class Config:
     executor_ref: str | None
     tools_ref: str | None
     health_probe_ref: str | None
+    distiller_ref: str | None = None
+
+    def load_distiller(self) -> Any:
+        """The configured Distiller: an instance, or a zero-argument factory that returns one."""
+        if self.distiller_ref is None:
+            return None
+        obj = import_string(self.distiller_ref, base_dir=self.path.parent)
+        if callable(obj) and not hasattr(obj, "distill"):
+            obj = obj()
+        if not hasattr(obj, "distill"):
+            raise ConfigError(f"'{self.distiller_ref}' is not a Distiller (it needs a distill() method)")
+        return obj
 
     def load_executor(self) -> Any:
         if self.executor_ref is None:
@@ -139,7 +153,7 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{file}: {exc}") from None
     refs: dict[str, str | None] = {}
-    for key in ("executor", "tools", "health_probe"):
+    for key in ("executor", "tools", "health_probe", "distiller"):
         value = data.pop(key, None)
         if value is not None and not isinstance(value, str):
             raise ConfigError(f"{file}: '{key}' must be a 'module:attr' string")
@@ -158,7 +172,18 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> Config:
         executor_ref=refs["executor"],
         tools_ref=refs["tools"],
         health_probe_ref=refs["health_probe"],
+        distiller_ref=refs["distiller"],
     )
+
+
+def init_config(path: str | Path = CONFIG_FILENAME, *, store: str | Path = ".tooldistill") -> bool:
+    """Write the sample ``tooldistill.toml`` pointing at ``store``; returns False when the file already exists."""
+    file = Path(path)
+    if file.exists():
+        return False
+    text = SAMPLE_CONFIG.replace('store = ".tooldistill"', f'store = "{Path(store).as_posix()}"', 1)
+    file.write_text(text, encoding="utf-8")
+    return True
 
 
 def import_string(ref: str, *, base_dir: Path | None = None) -> Any:
