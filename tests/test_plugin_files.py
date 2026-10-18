@@ -45,7 +45,7 @@ def test_plugin_directory(variant):
     assert server["type"] == "stdio" and server["alwaysLoad"] is True
     assert server["args"][-1] == "serve" and "tooldistill" in server["args"]
     if variant == "plugin":
-        assert server["command"] == "uvx" and f"@v{__version__}" in server["args"][1] and server["args"][1].startswith("tooldistill[plugin] @ git+https://")
+        assert server["command"] == "uvx" and server["args"][1] == f"tooldistill[plugin]=={__version__}"
     else:
         assert server["command"] == "uv" and server["args"][:4] == ["run", "--project", "${CLAUDE_PLUGIN_ROOT}/..", "--extra"]
 

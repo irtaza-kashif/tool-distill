@@ -4,7 +4,7 @@ Distilled tools for Claude Code: the session's MCP tool calls are recorded, `/to
 into a tool, the library verifies it before Claude can use it, and keeps it current when the tools underneath change.
 This directory is rendered by `scripts/render_plugin.py` from the library's texts and version; do not edit it by hand.
 
-The plugin's MCP server and hooks run the released library, pinned to this plugin's version: `uvx --from tooldistill[plugin] @ git+https://github.com/irtaza-kashif/tool-distill@v0.1.0 tooldistill serve`.
+The plugin's MCP server and hooks run the released library, pinned to this plugin's version: `uvx --from tooldistill[plugin]==0.1.0 tooldistill serve`.
 
 ## What the project needs
 

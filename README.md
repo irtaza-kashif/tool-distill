@@ -17,9 +17,12 @@ Other projects generate tools like this. The difference here is **trust and upke
 Requires Python 3.12 or newer. The project is managed with [uv](https://docs.astral.sh/uv/).
 
 ```
-uv add tooldistill          # in your project
+uv add tooldistill          # in your project (or: pip install tooldistill)
+uv add "tooldistill[plugin]"   # with the MCP SDK, for MCP-served base tools and the Claude Code plugin
 uv sync                     # in this repository
 ```
+
+Published on PyPI as [`tooldistill`](https://pypi.org/project/tooldistill/).
 
 ## SDK integration
 

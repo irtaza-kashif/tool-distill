@@ -30,9 +30,8 @@ DESCRIPTION = (
     "and keeps it current when the tools underneath change."
 )
 REPO_URL = "https://github.com/irtaza-kashif/tool-distill"
-# Until the package is published to PyPI the release pins the git tag of this version
-# (create it with `git tag v<version>` at release time); afterwards: f"tooldistill[plugin]=={__version__}".
-RELEASE_FROM = f"tooldistill[plugin] @ git+{REPO_URL}@v{__version__}"
+# The release plugin installs the library from PyPI, pinned to the version it was rendered with.
+RELEASE_FROM = f"tooldistill[plugin]=={__version__}"
 VARIANTS = {"release": ROOT / "plugin", "dev": ROOT / "plugin-dev"}
 
 
