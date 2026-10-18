@@ -263,7 +263,7 @@ Run in order; stop at the first failure. Store every result in `check_results`. 
 
 ### 2. Replay
 - Run the distilled tool with the proposal's test inputs in **replay mode**.
-- Fixtures come from the source trace's successful base tool calls.
+- Fixtures come from the source trace's successful **top-level** base tool calls. Calls made inside a distilled tool are excluded: after a runtime failure they are the broken path, and a stale inner response (an approval token, a generated id) would otherwise be matched before the agent's own.
 - Matching: exact match on (tool name, canonical input JSON). Fixtures are consumed in `seq` order and each is used at most once per replay: a call takes the **first unconsumed** fixture that matches, so a repeated call (e.g. a search before and after a create) gets the right recorded output. An unmatched call fails the check with a message naming the call, its arguments, and the nearest fixture for that tool. (Optional later: a relaxed mode that matches by tool name order.)
 - Passes if: no exception, every call matched a fixture, and `check(result)` returns True when `check` is defined.
 - **Live verification:** when fixtures cannot cover a call (e.g. a rebuild that uses a recovered tool), replay may use the real executor for unmatched calls **only if** `allow_live_verification = true`. New responses are saved as fixtures for that version. Otherwise the version stays draft with reason `needs_live_verification`. **Live verification has real side effects** (e.g. creates a real invoice); only enable it against mock or sandboxed base tools.

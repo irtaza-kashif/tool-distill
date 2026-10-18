@@ -85,8 +85,8 @@ def test_measure_counts_only_top_level_base_calls(registry):
     assert measured.baseline_calls == 11  # 5 noise + 4 path + 2 failed imports; inner and propose calls excluded
     assert measured.baseline_tokens == 1200
     assert measured.baseline_latency_ms == 5 * 5 + 4 * 10 + 2 * 7
-    assert len(measured.fixtures) == 10  # 5 noise + 4 path + the successful inner call
-    assert measured.fixtures[-1] == ("gmail_search", cj({"query": "inner"}), '["inner"]')
+    assert len(measured.fixtures) == 9  # 5 noise + 4 path; the successful inner call is not a fixture
+    assert ("gmail_search", cj({"query": "inner"}), '["inner"]') not in measured.fixtures
     assert measured.avoided == {"billing_import_from_email": AVOIDED_REASON}
 
 

@@ -86,10 +86,15 @@ class Measurements:
 
 
 def measure(trace: TraceData) -> Measurements:
-    """Baseline (top-level base tool calls only), fixtures (every successful base call) and avoided tools."""
+    """Baseline and fixtures from the top-level base tool calls; avoided tools from every base call.
+
+    Calls made inside a distilled tool are left out of the fixtures: a run is worth distilling after a distilled
+    tool failed, and that tool's inner calls are the broken path. Replay matches fixtures in order, so a stale inner
+    response (an approval token, a generated id) would be served before the agent's own, working one.
+    """
     base = [c for c in trace.calls if c.kind is CallKind.BASE]
     top_level = [c for c in base if c.parent_call_id is None]
-    fixtures = [(c.tool_name, c.input_json, c.output_json) for c in base if not c.is_error and c.output_json is not None]
+    fixtures = [(c.tool_name, c.input_json, c.output_json) for c in top_level if not c.is_error and c.output_json is not None]
     outcomes: dict[str, list[bool]] = {}
     for c in base:
         outcomes.setdefault(c.tool_name, []).append(not c.is_error)
