@@ -165,6 +165,20 @@ check_schemas_on_start = true
 | `allow_live_verification` | `false` | live verification has real side effects |
 | `check_schemas_on_start` | `true` | a cheap schema comparison on every `ToolDistill(...)` |
 
+## Base tools from MCP servers
+
+If your base tools live on MCP servers, skip `executor`/`tools` and point the config at them (the `plugin` extra, `uv add "tooldistill[plugin]"`, brings the MCP SDK):
+
+```toml
+mcp_config = ".mcp.json"            # Claude Code's format: {"mcpServers": {"name": {"type": "stdio", "command": ..., "args": [...], "env": {...}}}}
+[mcpServers.billing]                # inline entries use the same structure and are merged over the file by name
+type = "http"
+url = "http://localhost:8787/mcp"
+headers = { Authorization = "Bearer ${BILLING_TOKEN}" }   # ${VAR} and ${VAR:-default} expand from the environment
+```
+
+`ToolDistill.from_config()` then connects to every server (on a background thread, so the executor stays synchronous), names each tool `<server>__<tool>`, and uses the connections as the executor and the health probe. `tooldistill mcp tools` lists what the servers expose. A failed tool result raises, as the executor contract requires; a server that dies is reconnected on the next call. The same adapter is available directly as `tooldistill.integrations.mcp.MCPToolkit`.
+
 ## CLI
 
 ```

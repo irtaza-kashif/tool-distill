@@ -224,6 +224,25 @@ def test_traces_list_and_show(project: Path):
     assert missing.exit_code == 1 and "no trace 'zzz'" in missing.output
 
 
+def test_mcp_tools_command(tmp_path: Path, project: Path):
+    import sys
+
+    server = Path(__file__).resolve().parents[1] / "examples" / "invoice_agent" / "mcp_server.py"
+    (tmp_path / "mcp" ).mkdir()
+    (tmp_path / "mcp" / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"invoice": {"type": "stdio", "command": sys.executable, "args": [str(server)]}}}), encoding="utf-8"
+    )
+    toml = tmp_path / "mcp" / "tooldistill.toml"
+    toml.write_text('mcp_config = ".mcp.json"\n', encoding="utf-8")
+    result = invoke("mcp", "tools", "--config", toml)
+    assert result.exit_code == 0, result.output
+    assert "invoice__gmail_search" in result.output and "invoice__billing_import_from_email" in result.output
+    none = invoke("mcp", "tools", "--config", project)
+    assert none.exit_code == 1 and "configures no MCP servers" in none.output
+    missing = invoke("mcp", "tools", "--config", tmp_path / "nope.toml")
+    assert missing.exit_code == 1 and "config file not found" in missing.output
+
+
 def test_read_only_commands_do_not_import_the_executor(project: Path, monkeypatch):
     registry = seed(project)
     registry.close()

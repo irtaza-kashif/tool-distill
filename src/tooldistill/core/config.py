@@ -1,12 +1,15 @@
 """Library settings and the ``tooldistill.toml`` loader."""
 
 import importlib
+import json
+import os
+import re
 import sys
 import tomllib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tooldistill.core.errors import ConfigError
 
@@ -15,7 +18,9 @@ __all__ = [
     "DEFAULT_DISTILLER_MODEL",
     "SAMPLE_CONFIG",
     "Config",
+    "ServerSpec",
     "Settings",
+    "expand_env_refs",
     "import_string",
     "init_config",
     "load_config",
@@ -28,6 +33,8 @@ executor = "myapp.tools:execute_tool"      # imported by the CLI: execute_tool(n
 tools = "myapp.tools:TOOLS"                # list of Anthropic-format tool dicts
 # health_probe = "myapp.tools:probe"       # optional: probe(tool_name) -> bool
 # distiller = "myapp.distill:DISTILLER"    # optional: a custom Distiller (instance or factory) instead of ClaudeDistiller
+# mcp_config = ".mcp.json"                 # instead of executor/tools: base tools from MCP servers, in Claude Code's
+#                                          # .mcp.json structure; inline [mcpServers.<name>] tables are merged over it
 distiller_model = "claude-sonnet-5-5"
 fallback_distiller = true
 auto_promote = false
@@ -102,9 +109,116 @@ def _coerce(key: str, value: Any, expected: type) -> Any:
     raise ConfigError(f"setting '{key}' must be {expected.__name__}, got {type(value).__name__}")
 
 
+# --------------------------------------------------------------------------- MCP servers
+
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SERVER_KEYS = frozenset({"type", "command", "args", "env", "cwd", "url", "headers"})
+
+
+def expand_env_refs(value: Any, *, environ: Mapping[str, str] | None = None) -> Any:
+    """Expand ``${VAR}`` and ``${VAR:-default}`` in strings, recursively through lists and dict values.
+
+    An unset variable without a default stays literal, with one warning on stderr (Claude Code's rule).
+    """
+    env = os.environ if environ is None else environ
+
+    def replace(match: re.Match[str]) -> str:
+        name, default = match.group(1), match.group(2)
+        if name in env:
+            return env[name]
+        if default is not None:
+            return default
+        print(f"tooldistill: environment variable {name} is not set; leaving ${{{name}}} as is", file=sys.stderr)
+        return match.group(0)
+
+    if isinstance(value, str):
+        return _ENV_REF.sub(replace, value)
+    if isinstance(value, list):
+        return [expand_env_refs(item, environ=environ) for item in value]
+    if isinstance(value, Mapping):
+        return {key: expand_env_refs(item, environ=environ) for key, item in value.items()}
+    return value
+
+
+def _string_map(name: str, key: str, value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        raise ConfigError(f"MCP server '{name}': '{key}' must be a table of string values")
+    return dict(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ServerSpec:
+    """One MCP server the library may connect to, in Claude Code's ``.mcp.json`` structure."""
+
+    name: str
+    transport: Literal["stdio", "http", "sse"]
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(
+        cls,
+        name: str,
+        mapping: Mapping[str, Any],
+        *,
+        base_dir: Path | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> "ServerSpec":
+        if not isinstance(name, str) or not _SERVER_NAME_RE.match(name):
+            raise ConfigError(f"MCP server name {name!r} must match [A-Za-z0-9_-]+")
+        if not isinstance(mapping, Mapping):
+            raise ConfigError(f"MCP server '{name}' must be a table with command/args/env or url")
+        unknown = sorted(set(mapping) - _SERVER_KEYS)
+        if unknown:
+            raise ConfigError(f"MCP server '{name}': unknown key(s) {', '.join(unknown)}")
+        data = expand_env_refs(dict(mapping), environ=environ)
+        command, url = data.get("command"), data.get("url")
+        if (command is None) == (url is None):
+            raise ConfigError(f"MCP server '{name}' needs exactly one of 'command' (stdio) or 'url' (http/sse)")
+        if command is not None and not isinstance(command, str):
+            raise ConfigError(f"MCP server '{name}': 'command' must be a string")
+        if url is not None and not isinstance(url, str):
+            raise ConfigError(f"MCP server '{name}': 'url' must be a string")
+        transport = data.get("type")
+        if transport is None:
+            transport = "stdio" if command is not None else "http"
+        if transport not in ("stdio", "http", "sse"):
+            raise ConfigError(f"MCP server '{name}': type must be stdio, http or sse")
+        if (transport == "stdio") != (command is not None):
+            raise ConfigError(f"MCP server '{name}': type {transport} does not match the given command/url")
+        args = data.get("args", [])
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise ConfigError(f"MCP server '{name}': 'args' must be a list of strings")
+        cwd = data.get("cwd")
+        if cwd is not None:
+            if not isinstance(cwd, str):
+                raise ConfigError(f"MCP server '{name}': 'cwd' must be a string")
+            path = Path(cwd).expanduser()
+            if not path.is_absolute() and base_dir is not None:
+                path = base_dir / path
+            cwd = str(path)
+        return cls(
+            name=name,
+            transport=transport,
+            command=command,
+            args=tuple(args),
+            env=_string_map(name, "env", data.get("env")),
+            cwd=cwd,
+            url=url,
+            headers=_string_map(name, "headers", data.get("headers")),
+        )
+
+
 @dataclass(slots=True)
 class Config:
-    """A parsed ``tooldistill.toml``. The executor, tools and probe are imported on demand."""
+    """A parsed ``tooldistill.toml``. The executor, tools, probe, distiller and MCP servers are loaded on demand."""
 
     path: Path
     store: Path
@@ -113,6 +227,35 @@ class Config:
     tools_ref: str | None
     health_probe_ref: str | None
     distiller_ref: str | None = None
+    mcp_config: Path | None = None
+    mcp_servers: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def uses_mcp(self) -> bool:
+        """Base tools come from MCP servers rather than from ``executor``/``tools`` references."""
+        return self.mcp_config is not None or bool(self.mcp_servers)
+
+    def load_mcp_servers(self, *, environ: Mapping[str, str] | None = None) -> dict[str, ServerSpec]:
+        """The configured MCP servers: the ``mcp_config`` file first, inline ``[mcpServers]`` entries merged over it."""
+        raw: dict[str, Any] = {}
+        if self.mcp_config is not None:
+            try:
+                data = json.loads(self.mcp_config.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                raise ConfigError(f"mcp_config file not found: {self.mcp_config}") from None
+            except ValueError as exc:
+                raise ConfigError(f"{self.mcp_config}: {exc}") from None
+            if not isinstance(data, dict):
+                raise ConfigError(f"{self.mcp_config}: expected an object with an mcpServers map")
+            servers = data.get("mcpServers", data)
+            if not isinstance(servers, dict):
+                raise ConfigError(f"{self.mcp_config}: mcpServers must be an object")
+            raw.update(servers)
+        raw.update(self.mcp_servers)
+        return {
+            name: ServerSpec.from_mapping(name, spec, base_dir=self.path.parent, environ=environ)
+            for name, spec in raw.items()
+        }
 
     def load_distiller(self) -> Any:
         """The configured Distiller: an instance, or a zero-argument factory that returns one."""
@@ -164,8 +307,20 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> Config:
     store_path = Path(store).expanduser()
     if not store_path.is_absolute():
         store_path = file.parent / store_path
+    mcp_config = data.pop("mcp_config", None)
+    if mcp_config is not None and not isinstance(mcp_config, str):
+        raise ConfigError(f"{file}: 'mcp_config' must be a path string")
+    mcp_servers = data.pop("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        raise ConfigError(f"{file}: 'mcpServers' must be a table of servers")
     settings = Settings.from_mapping(data)
-    return Config(
+    mcp_path: Path | None = None
+    if mcp_config is not None:
+        mcp_path = Path(mcp_config).expanduser()
+        if not mcp_path.is_absolute():
+            mcp_path = file.parent / mcp_path
+        mcp_path = mcp_path.resolve()
+    config = Config(
         path=file,
         store=store_path.resolve(),
         settings=settings,
@@ -173,7 +328,12 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> Config:
         tools_ref=refs["tools"],
         health_probe_ref=refs["health_probe"],
         distiller_ref=refs["distiller"],
+        mcp_config=mcp_path,
+        mcp_servers=mcp_servers,
     )
+    if config.uses_mcp and (refs["executor"] is not None or refs["tools"] is not None):
+        raise ConfigError(f"{file}: use either executor/tools or MCP servers (mcp_config / mcpServers), not both")
+    return config
 
 
 def init_config(path: str | Path = CONFIG_FILENAME, *, store: str | Path = ".tooldistill") -> bool:

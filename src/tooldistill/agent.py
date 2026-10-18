@@ -68,6 +68,7 @@ class ToolDistill:
         self.registry = Registry(store)
         self._distiller = distiller
         self._loaded: dict[tuple[str, int, str], LoadedTool] = {}
+        self.toolkit: Any = None  # the MCPToolkit behind executor/tools when built from an MCP config
         clashes = [tool.name for tool in self.registry.list_tools() if tool.name in self.tools]
         if clashes:
             raise ToolDefinitionError(f"base tool names collide with existing distilled tools: {', '.join(clashes)}")
@@ -83,16 +84,35 @@ class ToolDistill:
         """Build from ``tooldistill.toml``; keyword overrides replace settings from the file."""
         config = load_config(path)
         settings = {**config.settings.as_dict(), **overrides}
-        return cls(
-            config.store,
-            config.load_executor(),
-            config.load_tools(),
-            distiller=distiller if distiller is not None else config.load_distiller(),
-            health_probe=config.load_health_probe(),
-            **settings,
-        )
+        toolkit = None
+        if config.uses_mcp:
+            from tooldistill.integrations.mcp import MCPToolkit
+
+            toolkit = MCPToolkit(config.load_mcp_servers()).start()
+            executor: Executor = toolkit.executor
+            tools = toolkit.tools
+            probe = config.load_health_probe() or toolkit.probe
+        else:
+            executor, tools, probe = config.load_executor(), config.load_tools(), config.load_health_probe()
+        try:
+            instance = cls(
+                config.store,
+                executor,
+                tools,
+                distiller=distiller if distiller is not None else config.load_distiller(),
+                health_probe=probe,
+                **settings,
+            )
+        except BaseException:
+            if toolkit is not None:
+                toolkit.close()
+            raise
+        instance.toolkit = toolkit
+        return instance
 
     def close(self) -> None:
+        if self.toolkit is not None:
+            self.toolkit.close()
         self.registry.close()
 
     def __enter__(self) -> "ToolDistill":

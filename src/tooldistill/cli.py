@@ -23,6 +23,8 @@ from tooldistill.core.registry import Registry
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Verified, reusable distilled tools for agents.")
 traces_app = typer.Typer(no_args_is_help=True, help="Recorded runs.")
 app.add_typer(traces_app, name="traces")
+mcp_app = typer.Typer(no_args_is_help=True, help="MCP servers configured as base tools.")
+app.add_typer(mcp_app, name="mcp")
 
 DEFAULT_STORE = ".tooldistill"
 ConfigOpt = Annotated[Path, typer.Option("--config", "-c", help="Path to tooldistill.toml.")]
@@ -271,6 +273,29 @@ def traces_show(
             typer.echo(_table(["seq", "kind", "tool", "ver", "result", "ms", "input", "output / error"], rows))
     finally:
         registry.close()
+
+
+@mcp_app.command("tools")
+def mcp_tools(config: ConfigOpt = Path(CONFIG_FILENAME)) -> None:
+    """Connect to the configured MCP servers and list the base tools they provide."""
+    if not config.is_file():
+        _fail(f"config file not found: {config}")
+    with _errors():
+        loaded = load_config(config)
+        if not loaded.uses_mcp:
+            _fail(f"{config} configures no MCP servers (set mcp_config or [mcpServers])")
+        from tooldistill.core.serialization import schema_hash
+        from tooldistill.integrations.mcp import MCPToolkit
+
+        with MCPToolkit(loaded.load_mcp_servers()) as toolkit:
+            rows = [
+                [toolkit.server_of(tool["name"]), tool["name"], schema_hash(tool["input_schema"])[:12], _short(tool["description"], 70)]
+                for tool in toolkit.tools
+            ]
+    if not rows:
+        typer.echo("the configured MCP servers expose no tools")
+        return
+    typer.echo(_table(["server", "base tool", "schema hash", "description"], rows))
 
 
 @app.command()

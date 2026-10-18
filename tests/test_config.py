@@ -111,6 +111,85 @@ def test_from_config_builds_tooldistill(tmp_path):
         td.close()
 
 
+def test_expand_env_refs(capsys):
+    from tooldistill.core.config import expand_env_refs
+
+    env = {"TOKEN": "secret", "EMPTY": ""}
+    assert expand_env_refs("Bearer ${TOKEN}", environ=env) == "Bearer secret"
+    assert expand_env_refs("${MISSING:-fallback}", environ=env) == "fallback"
+    assert expand_env_refs("${EMPTY:-x}", environ=env) == ""  # set but empty wins over the default
+    assert expand_env_refs("${MISSING}", environ=env) == "${MISSING}"
+    assert "MISSING is not set" in capsys.readouterr().err
+    assert expand_env_refs(["${TOKEN}", 1, {"k": "${TOKEN}"}], environ=env) == ["secret", 1, {"k": "secret"}]
+    assert expand_env_refs({"${TOKEN}": "${TOKEN}"}, environ=env) == {"${TOKEN}": "secret"}  # keys are left alone
+
+
+def test_server_spec_from_mapping(tmp_path):
+    from tooldistill.core.config import ServerSpec
+
+    stdio = ServerSpec.from_mapping("invoice", {"command": "uv", "args": ["run", "x"], "env": {"A": "${A:-1}"}, "cwd": "sub"}, base_dir=tmp_path, environ={})
+    assert (stdio.transport, stdio.command, stdio.args, stdio.env) == ("stdio", "uv", ("run", "x"), {"A": "1"})
+    assert stdio.cwd == str(tmp_path / "sub") and stdio.url is None and stdio.headers == {}
+    http = ServerSpec.from_mapping("billing", {"url": "http://x/mcp", "headers": {"Authorization": "Bearer ${T}"}}, environ={"T": "tok"})
+    assert (http.transport, http.url, http.headers) == ("http", "http://x/mcp", {"Authorization": "Bearer tok"})
+    assert ServerSpec.from_mapping("s", {"type": "sse", "url": "http://x/sse"}).transport == "sse"
+    for name, mapping, match in [
+        ("bad name", {"command": "x"}, "must match"),
+        ("s", {"command": "x", "url": "http://x"}, "exactly one of"),
+        ("s", {}, "exactly one of"),
+        ("s", {"command": "x", "type": "http"}, "does not match"),
+        ("s", {"url": "http://x", "type": "ws"}, "must be stdio, http or sse"),
+        ("s", {"command": "x", "args": "notalist"}, "'args' must be a list"),
+        ("s", {"command": "x", "env": {"A": 1}}, "'env' must be a table of string"),
+        ("s", {"command": "x", "bogus": 1}, "unknown key"),
+        ("s", "not a table", "must be a table"),
+    ]:
+        with pytest.raises(ConfigError, match=match):
+            ServerSpec.from_mapping(name, mapping)  # type: ignore[arg-type]
+
+
+def test_mcp_config_file_and_inline_servers(tmp_path):
+    (tmp_path / ".mcp.json").write_text(
+        '{"mcpServers": {"invoice": {"type": "stdio", "command": "python", "args": ["server.py"]}, "crm": {"type": "http", "url": "http://crm/mcp"}}}',
+        encoding="utf-8",
+    )
+    toml = tmp_path / "tooldistill.toml"
+    toml.write_text(
+        'mcp_config = ".mcp.json"\n[mcpServers.crm]\nurl = "http://override/mcp"\n[mcpServers.extra]\ncommand = "uvx"\nargs = ["extra-server"]\n',
+        encoding="utf-8",
+    )
+    config = load_config(toml)
+    assert config.uses_mcp and config.mcp_config == (tmp_path / ".mcp.json").resolve()
+    servers = config.load_mcp_servers(environ={})
+    assert list(servers) == ["invoice", "crm", "extra"]
+    assert servers["crm"].url == "http://override/mcp"  # inline wins over the file
+    assert servers["extra"].command == "uvx" and servers["invoice"].args == ("server.py",)
+    bare = tmp_path / "bare.json"
+    bare.write_text('{"only": {"command": "x"}}', encoding="utf-8")
+    toml.write_text('mcp_config = "bare.json"\n', encoding="utf-8")
+    assert list(load_config(toml).load_mcp_servers(environ={})) == ["only"]
+    toml.write_text('mcp_config = "missing.json"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="mcp_config file not found"):
+        load_config(toml).load_mcp_servers()
+    bare.write_text("[]", encoding="utf-8")
+    toml.write_text('mcp_config = "bare.json"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="expected an object"):
+        load_config(toml).load_mcp_servers()
+    assert not load_config(write_project(tmp_path, SAMPLE_CONFIG)).uses_mcp
+
+
+def test_mcp_servers_and_executor_refs_are_exclusive(tmp_path):
+    toml = write_project(tmp_path, 'executor = "myapp.tools:execute_tool"\nmcp_config = ".mcp.json"\n')
+    with pytest.raises(ConfigError, match="not both"):
+        load_config(toml)
+    toml.write_text('mcp_config = 3\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="'mcp_config' must be a path string"):
+        load_config(toml)
+    toml.write_text('mcpServers = "x"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="'mcpServers' must be a table"):
+        load_config(toml)
+
+
 def test_tooldistill_validates_its_arguments(tmp_path):
     with pytest.raises(ConfigError, match="unknown setting"):
         ToolDistill(tmp_path / "s", lambda n, a: None, [], bogus=1)

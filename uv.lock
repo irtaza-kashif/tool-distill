@@ -763,6 +763,7 @@ plugin = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mcp" },
     { name = "pytest" },
 ]
 
@@ -770,13 +771,16 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=1.0" },
     { name = "jsonschema", specifier = ">=4.23" },
-    { name = "mcp", marker = "extra == 'plugin'", specifier = ">=1.0" },
+    { name = "mcp", marker = "extra == 'plugin'", specifier = ">=2.3,<3" },
     { name = "typer", specifier = ">=0.15" },
 ]
 provides-extras = ["plugin"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "truststore"

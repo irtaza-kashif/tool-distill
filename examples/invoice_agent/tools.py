@@ -10,8 +10,10 @@ Keeping the API change (INVOICE_SCHEMA_CURRENCY) separate from the definition ch
 reproduces an API that changed before its tool definition did.
 """
 
+import json
 import os
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 __all__ = [
@@ -47,10 +49,19 @@ _overrides: dict[str, bool] = {}
 
 
 def switch(name: str) -> bool:
+    """In-process override, else the JSON file named by INVOICE_SWITCH_FILE (lets a running server be flipped), else the env var."""
     if name not in _SWITCH_ENV:
         raise KeyError(name)
     if name in _overrides:
         return _overrides[name]
+    switch_file = os.environ.get("INVOICE_SWITCH_FILE")
+    if switch_file:
+        try:
+            data = json.loads(Path(switch_file).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict) and name in data:
+            return bool(data[name])
     return os.environ.get(_SWITCH_ENV[name], "").strip().lower() in ("1", "true", "yes", "on")
 
 

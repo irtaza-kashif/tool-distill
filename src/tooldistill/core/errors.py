@@ -78,3 +78,7 @@ class LifecycleError(ToolDistillError):
 
 class ConfigError(ToolDistillError):
     """tooldistill.toml or the settings passed to ToolDistill are invalid."""
+
+
+class MCPToolError(ToolDistillError):
+    """An MCP tool call failed: the tool reported an error, timed out, is unknown, or its server is unreachable."""
