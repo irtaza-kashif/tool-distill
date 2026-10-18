@@ -1,4 +1,4 @@
-"""The incident demo's fake world: pagination, traps, switches and the success check. No network."""
+"""The incident demo's fake world: pagination, the upstream cause, the hidden rules, switches and the success check."""
 
 import json
 
@@ -6,7 +6,6 @@ import incident_tools as world
 import pytest
 
 SWITCHES = ("rollback_outage", "schema_reason", "tools_updated")
-TASK = world.task_for("A-1042")
 
 
 @pytest.fixture(autouse=True)
@@ -30,15 +29,14 @@ def page_of(service_id: str) -> int:
 def solve(alert_id: str) -> dict:
     """The sequence a distilled tool would make: the known-good path through the world."""
     alert = world.alerts_get(alert_id)
-    slug = alert["service_name"].lower().replace(" ", "-")
-    service = next(s for s in world.services_search(slug) if s["env"] == alert["environment"] and s["id"] == slug)
-    current = world.deploys_get(service["current_deploy_id"])
-    token = world.approvals_request(service["id"], "rollback")["token"]
-    rollback = world.deploys_rollback(service["id"], current["previous_deploy_id"], token)
-    team = world.teams_get(service["team_id"])
-    user = world.users_get(team["oncall_user_id"])
-    incident = world.incidents_create(f"{alert['title']}: rolled back", service["id"], "sev2", user["id"])
-    world.chat_post("#incidents", f"{incident['id']}: rolled back {service['id']} to {rollback['rolled_back_to']}, assigned to {user['handle']}")
+    victim = world.services_get(alert["service_name"].lower().replace(" ", "-"))
+    cause = max(world.services_dependencies(victim["id"]), key=lambda d: d["current_deploy"]["deployed_at"])
+    team = world.teams_get(cause["team_id"])
+    incident = world.incidents_create(f"{alert['title']}: {cause['id']} rolled back", cause["id"], "sev2", team["oncall_user_id"])
+    token = world.approvals_request(cause["id"], "rollback", incident["id"])["token"]
+    rollback = world.deploys_rollback(cause["id"], cause["current_deploy"]["previous_deploy_id"], token)
+    world.alerts_ack(alert_id, incident["id"])
+    world.chat_post("#incidents", f"{incident['id']}: rolled back {cause['id']} to {rollback['rolled_back_to']}")
     return incident
 
 
@@ -52,14 +50,13 @@ def test_pagination_and_placement():
         world.services_list(5)
     with pytest.raises(world.ToolError, match="page must be"):
         world.services_list(0)
-    deploys = world.deploys_list("checkout-api")
+    deploys = world.deploys_list("payments-api")
     assert deploys["total_pages"] == 2 and deploys["items"][0]["status"] == "live"
     assert world.deploys_list("auth-api")["total"] == 3
 
 
-def test_search_matches_slugs_only_and_alerts_name_services():
+def test_search_matches_slugs_only_and_alerts_name_victims():
     assert world.services_search("Checkout API") == []
-    assert [s["id"] for s in world.services_search("checkout-api")] == ["checkout-api", "checkout-api-staging"]
     assert [s["id"] for s in world.services_search("checkout")] == ["checkout-worker", "checkout-api", "checkout-api-staging"]
     alert = world.alerts_get("A-1042")
     assert alert["service_name"] == "Checkout API" and alert["environment"] == "prod" and alert["status"] == "firing"
@@ -71,14 +68,19 @@ def test_search_matches_slugs_only_and_alerts_name_services():
         world.services_get("Checkout API")
 
 
-def test_deploy_history_points_at_the_bad_change():
-    service = world.services_get("checkout-api")
-    current = world.deploys_get(service["current_deploy_id"])
-    assert "PAYMENT_TIMEOUT_MS=200" in current["message"] and current["status"] == "live"
-    assert current["previous_deploy_id"] == world.GOOD_DEPLOY["checkout-api"]
-    previous = world.deploys_get(current["previous_deploy_id"])
-    assert previous["status"] == "superseded" and previous["deployed_at"] < current["deployed_at"]
-    assert world.services_get("checkout-worker")["current_deploy_id"] not in world.BAD_DEPLOY.values()
+def test_the_cause_is_upstream_of_the_victim():
+    victim = world.services_get("checkout-api")
+    assert victim["current_deploy"]["deployed_at"] < "2026-10-16"  # nothing recent on the alerted service itself
+    deps = world.services_dependencies("checkout-api")
+    assert [d["id"] for d in deps] == ["payments-api", "inventory-api", "pricing-engine", "session-store"]
+    cause = max(deps, key=lambda d: d["current_deploy"]["deployed_at"])
+    assert cause["id"] == "payments-api" and "PAYMENT_TIMEOUT_MS=200" in cause["current_deploy"]["message"]
+    assert cause["current_deploy"]["previous_deploy_id"] == world.GOOD_DEPLOY["payments-api"]
+    decoy = next(d for d in deps if d["id"] == "session-store")
+    assert decoy["current_deploy"]["deployed_at"] > "2026-10-17"  # deployed yesterday: suspicious but innocent
+    assert world.CAUSE_OF == {"checkout-api": "payments-api", "payments-worker": "ledger-api"}
+    worker_deps = world.services_dependencies("payments-worker")
+    assert max(worker_deps, key=lambda d: d["current_deploy"]["deployed_at"])["id"] == "ledger-api"
 
 
 def test_logs_and_metrics_traps():
@@ -93,7 +95,9 @@ def test_logs_and_metrics_traps():
     before = world.logs_query("checkout-api", "2026-10-18T12:30:00Z", "2026-10-18T13:10:00Z")
     after = world.logs_query("checkout-api", "2026-10-18T13:20:00Z", "2026-10-18T14:00:00Z")
     assert all(e["level"] == "INFO" for e in before)
-    assert any("PAYMENT_TIMEOUT_MS=200" in e["message"] for e in after if e["level"] == "ERROR")
+    assert any("payments-api" in e["message"] for e in after if e["level"] == "ERROR")  # the logs point upstream
+    cause_logs = world.logs_query("payments-api", "2026-10-18T13:20:00Z", "2026-10-18T14:00:00Z")
+    assert any("PAYMENT_TIMEOUT_MS=200" in e["message"] for e in cause_logs)
     assert len(world.logs_query("checkout-api", "2026-10-18T13:20:00Z", "2026-10-18T14:00:00Z", limit=5)) == 5
     rate = world.metrics_query("checkout-api", "error_rate", "1h")["points"]
     assert rate[0]["value"] == 0.4 and rate[-1]["value"] == 12.5
@@ -104,25 +108,34 @@ def test_logs_and_metrics_traps():
         world.metrics_query("checkout-api", "error_rate", "one hour")
 
 
-def test_rollback_needs_a_valid_token_and_changes_the_live_deploy():
-    good = world.GOOD_DEPLOY["checkout-api"]
+def test_rollback_needs_an_incident_an_approval_and_a_valid_token():
+    good = world.GOOD_DEPLOY["payments-api"]
     with pytest.raises(world.ToolError, match="confirmation_token required"):
-        world.deploys_rollback("checkout-api", good)
+        world.deploys_rollback("payments-api", good)
+    with pytest.raises(world.ToolError, match="must reference an open incident"):
+        world.approvals_request("payments-api", "rollback")
+    with pytest.raises(world.ToolError, match="unknown incident"):
+        world.approvals_request("payments-api", "rollback", "INC-9999")
+    incident = world.incidents_create("Checkout 5xx", "payments-api", "sev2", "u_1032")
+    assert world.approvals_request("payments-api", "restart")["token"].startswith("apr_")  # only rollbacks need an incident
     with pytest.raises(world.ToolError, match="invalid or expired"):
-        world.deploys_rollback("checkout-api", good, "apr_nope")
-    other = world.approvals_request("payments-worker", "rollback")["token"]
+        world.deploys_rollback("payments-api", good, "apr_nope")
+    other = world.approvals_request("ledger-api", "rollback", incident["id"])["token"]
     with pytest.raises(world.ToolError, match="invalid or expired"):
-        world.deploys_rollback("checkout-api", good, other)
-    token = world.approvals_request("checkout-api", "rollback")["token"]
+        world.deploys_rollback("payments-api", good, other)
+    token = world.approvals_request("payments-api", "rollback", incident["id"])["token"]
     with pytest.raises(world.ToolError, match="belongs to"):
-        world.deploys_rollback("checkout-api", world.GOOD_DEPLOY["payments-worker"], token)
-    result = world.deploys_rollback("checkout-api", good, token)
-    assert result["rolled_back_to"] == good and world.services_get("checkout-api")["current_deploy_id"] == good
+        world.deploys_rollback("payments-api", world.GOOD_DEPLOY["ledger-api"], token)
+    result = world.deploys_rollback("payments-api", good, token)
+    assert result["rolled_back_to"] == good and world.services_get("payments-api")["current_deploy"]["id"] == good
     assert world.deploys_get(result["rolled_back_from"])["status"] == "rolled_back"
     with pytest.raises(world.ToolError, match="invalid or expired"):  # single use
-        world.deploys_rollback("checkout-api", result["rolled_back_from"], token)
+        world.deploys_rollback("payments-api", result["rolled_back_from"], token)
+    world.incidents_update(incident["id"], "resolved")
+    with pytest.raises(world.ToolError, match="approvals need an open incident"):
+        world.approvals_request("payments-api", "rollback", incident["id"])
     with pytest.raises(world.ToolError, match="action must be"):
-        world.approvals_request("checkout-api", "delete")
+        world.approvals_request("payments-api", "delete")
 
 
 def test_shortcut_outage_and_schema_switches():
@@ -130,20 +143,22 @@ def test_shortcut_outage_and_schema_switches():
     world.set_switch("rollback_outage", True)
     assert not world.probe("deploys_rollback_latest")
     with pytest.raises(world.ToolError, match="503"):
-        world.execute_tool("deploys_rollback_latest", {"service_id": "checkout-api"})
+        world.execute_tool("deploys_rollback_latest", {"service_id": "payments-api"})
     world.set_switch("rollback_outage", None)
-    result = world.deploys_rollback_latest("checkout-api")
-    assert result["rolled_back_to"] == world.GOOD_DEPLOY["checkout-api"] and result["via"] == "deploys_rollback_latest"
+    result = world.deploys_rollback_latest("payments-api")
+    assert result["rolled_back_to"] == world.GOOD_DEPLOY["payments-api"] and result["via"] == "deploys_rollback_latest"
     world.reset()
     world.set_switch("schema_reason", True)
     with pytest.raises(world.ToolError, match="missing required property 'reason'"):
-        world.deploys_rollback_latest("checkout-api")
-    token = world.approvals_request("checkout-api", "rollback")["token"]
+        world.deploys_rollback_latest("payments-api")
+    incident = world.incidents_create("x", "payments-api", "sev2", "u_1032")
+    token = world.approvals_request("payments-api", "rollback", incident["id"])["token"]
     with pytest.raises(world.ToolError, match="missing required property 'reason'"):
-        world.deploys_rollback("checkout-api", world.GOOD_DEPLOY["checkout-api"], token)
-    assert world.deploys_rollback("checkout-api", world.GOOD_DEPLOY["checkout-api"], token, reason="bad config")["reason"] == "bad config"
+        world.deploys_rollback("payments-api", world.GOOD_DEPLOY["payments-api"], token)
+    assert world.deploys_rollback("payments-api", world.GOOD_DEPLOY["payments-api"], token, reason="bad config")["reason"] == "bad config"
     names = {t["name"]: t for t in world.tool_definitions(reason=False)}
-    assert len(names) == 20 and "reason" not in names["deploys_rollback"]["input_schema"]["properties"]
+    assert len(names) == 21 and "reason" not in names["deploys_rollback"]["input_schema"]["properties"]
+    assert "confirmation_token" not in names["deploys_rollback"]["input_schema"]["required"]  # the API, not the schema, enforces it
     updated = {t["name"]: t for t in world.tool_definitions(reason=True)}
     for name in ("deploys_rollback", "deploys_rollback_latest"):
         assert "reason" in updated[name]["input_schema"]["required"]
@@ -152,26 +167,32 @@ def test_shortcut_outage_and_schema_switches():
 
 
 def test_writes_reject_wrong_value_kinds():
-    with pytest.raises(world.ToolError, match="severity must be"):
-        world.incidents_create("x", "checkout-api", "high", "u_1032")
+    with pytest.raises(world.ToolError, match="severity must be one of: sev1, sev2, sev3"):
+        world.incidents_create("x", "payments-api", "high", "u_1032")
     with pytest.raises(world.ToolError, match="assignee_id must be a user id such as u_1032"):
-        world.incidents_create("x", "checkout-api", "sev1", "@maya")
+        world.incidents_create("x", "payments-api", "sev1", "@maya")
     with pytest.raises(world.ToolError, match="unknown user"):
-        world.incidents_create("x", "checkout-api", "sev1", "u_9999")
+        world.incidents_create("x", "payments-api", "sev1", "u_9999")
     with pytest.raises(world.ToolError, match="unknown channel"):
         world.chat_post("#ops", "hello")
-    incident = world.incidents_create("Checkout 5xx", "checkout-api", "sev1", "u_1032")
+    incident = world.incidents_create("Checkout 5xx", "payments-api", "sev1", "u_1032")
     assert incident["id"] == "INC-2041" and incident["status"] == "open"
     updated = world.incidents_update(incident["id"], "mitigated", "rolled back")
     assert updated["status"] == "mitigated" and updated["notes"] == ["rolled back"]
     with pytest.raises(world.ToolError, match="status must be"):
         world.incidents_update(incident["id"], "closed")
+    with pytest.raises(world.ToolError, match="unknown incident"):
+        world.alerts_ack("A-1042", "INC-9999")
+    acked = world.alerts_ack("A-1042", incident["id"])
+    assert acked["status"] == "acknowledged" and acked["incident_id"] == incident["id"]
+    with pytest.raises(world.ToolError, match="not firing"):
+        world.alerts_ack("A-1042", incident["id"])
+    assert [a["id"] for a in world.alerts_list("acknowledged")["items"]] == ["A-1042"]
     assert world.teams_get("t_payments")["oncall_user_id"] == "u_1032"
     assert world.users_get("u_1032")["handle"] == "@maya"
     with pytest.raises(world.ToolError, match="handles such as @maya are not ids"):
         world.users_get("@maya")
     assert world.oncall_schedule("t_payments", "2026-10-18")[0]["user_id"] == "u_1032"
-    assert world.services_dependencies("checkout-api")[0] == "payments-api"
     assert world.runbooks_search("rollback")[0]["title"] == "Rolling back a deploy"
 
 
@@ -183,6 +204,17 @@ def test_task_succeeded_only_after_the_full_sequence(alert_id):
     solve(alert_id)
     assert world.task_succeeded(task)
     world.reset()
+    assert not world.task_succeeded(task) and world.alerts_get(alert_id)["status"] == "firing"
+
+
+def test_rolling_back_the_victim_does_not_count():
+    """The victim has nothing to roll back to that helps; only the cause's rollback satisfies the task."""
+    task = world.task_for("A-1042")
+    incident = world.incidents_create("x", "checkout-api", "sev2", "u_1032")
+    token = world.approvals_request("checkout-api", "rollback", incident["id"])["token"]
+    world.deploys_rollback("checkout-api", world.services_get("checkout-api")["current_deploy"]["previous_deploy_id"], token)
+    world.alerts_ack("A-1042", incident["id"])
+    world.chat_post("#incidents", "rolled back checkout-api")
     assert not world.task_succeeded(task)
 
 

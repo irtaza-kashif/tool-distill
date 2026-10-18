@@ -1,9 +1,16 @@
 """Fake base tools for the incident demo: an alerting, deploy, logs, metrics, on-call and chat world, all in memory.
 
-The world is deliberately hard to navigate the first time: paginated lists, display names that differ from ids, a
-near-duplicate service, ids that must be followed hop by hop, a log query that rejects wide windows, a rollback
-that needs an approval token, writes that reject wrong value kinds, and an advertised one-call rollback that may be
-down. A distilled tool that knows the sequence needs none of that.
+The world is deliberately hard to navigate the first time, the way a real one is:
+
+- the alert names a service by display name; services are keyed by slug and a near-duplicate exists;
+- the alerted service is a victim: the bad deploy sits on one of its upstream dependencies, which the logs hint at
+  and the dependency list reveals, next to a decoy that deployed yesterday;
+- the tool descriptions say what a tool does, not its rules; the rules come back as error messages: the log
+  window cap, the metric names, the approval token a rollback needs, the open incident an approval needs, the user
+  id an incident wants where the model has a handle, the severity scale;
+- an advertised one-call rollback may be down (the outage switch).
+
+A distilled tool that knows the sequence needs none of that.
 
 Switches (environment variables, read at call time; ``set_switch()`` overrides them in-process; the JSON file named
 by INCIDENT_SWITCH_FILE overrides both, so a running MCP server can be flipped):
@@ -27,6 +34,8 @@ from typing import Any
 
 __all__ = [
     "ALERTS",
+    "BAD_DEPLOY",
+    "CAUSE_OF",
     "GOOD_DEPLOY",
     "NOW",
     "SERVICES",
@@ -99,10 +108,6 @@ def _iso(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ago(**delta: float) -> str:
-    return _iso(NOW - timedelta(**delta))
-
-
 def _short_hash(*parts: str) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:6]
 
@@ -129,9 +134,8 @@ USERS: dict[str, dict[str, Any]] = {
 
 CHANNELS = ["#incidents", "#deploys", *(team["channel"] for team in TEAMS.values())]
 
-# (slug, display name, team, environment, tier). Order is the list order, 10 per page:
-# checkout-worker (a decoy) is on page 1, payments-api (a decoy) on page 2, checkout-api on page 3,
-# checkout-api-staging right after it, payments-worker on page 4.
+# (slug, display name, team, environment, tier). List order is page order, 10 per page: checkout-worker (a decoy)
+# is on page 1, payments-api on page 2, checkout-api on page 3 right before its staging twin, payments-worker on page 4.
 _SERVICE_SPECS: list[tuple[str, str, str, str, int]] = [
     ("auth-api", "Auth API", "t_identity", "prod", 1),
     ("auth-worker", "Auth Worker", "t_identity", "prod", 2),
@@ -169,44 +173,67 @@ _SERVICE_SPECS: list[tuple[str, str, str, str, int]] = [
     ("returns-api", "Returns API", "t_fulfillment", "prod", 2),
 ]
 
-# The two services with a bad deploy: what it changed, when, and what the logs say afterwards.
+# The two incidents. The alert fires on a victim; the bad deploy is on one of its dependencies (the cause).
 _INCIDENT_SPECS: dict[str, dict[str, Any]] = {
     "checkout-api": {
+        "cause": "payments-api",
         "minutes_ago": 40,
         "message": "Lower upstream timeout: PAYMENT_TIMEOUT_MS=200 (was 2000)",
-        "error": "TimeoutError: upstream payment gateway did not respond within 200 ms (PAYMENT_TIMEOUT_MS=200)",
+        "victim_error": "UpstreamTimeout: payments-api did not respond within 200 ms",
+        "cause_error": "TimeoutError: gateway call exceeded PAYMENT_TIMEOUT_MS=200",
         "alert": {"id": "A-1042", "title": "High 5xx rate on Checkout API (prod)", "metric": "http_5xx_rate", "threshold": "5%"},
     },
     "payments-worker": {
+        "cause": "ledger-api",
         "minutes_ago": 35,
-        "message": "Set QUEUE_BATCH_SIZE=5000 (was 500)",
-        "error": "QueueBacklog: batch of 5000 messages exceeded the visibility timeout (QUEUE_BATCH_SIZE=5000)",
+        "message": "Set LEDGER_BATCH_SIZE=5000 (was 500)",
+        "victim_error": "UpstreamError: ledger-api returned 503 (batch too large)",
+        "cause_error": "BatchTooLarge: 5000 entries exceed the write limit (LEDGER_BATCH_SIZE=5000)",
         "alert": {"id": "A-1057", "title": "Queue latency on Payments Worker (prod)", "metric": "queue_latency_p95", "threshold": "30s"},
     },
+}
+CAUSE_OF: dict[str, str] = {victim: spec["cause"] for victim, spec in _INCIDENT_SPECS.items()}
+_CAUSES: dict[str, dict[str, Any]] = {spec["cause"]: spec for spec in _INCIDENT_SPECS.values()}
+
+# Deploys that are recent enough to look suspicious but are not the cause.
+_DECOY_DEPLOYS: dict[str, tuple[int, str]] = {  # slug -> (hours ago, message)
+    "session-store": (26, "Rotate session signing keys"),
+    "notifications-api": (20, "Add SMS provider fallback"),
+}
+
+_DEPENDENCIES: dict[str, list[str]] = {
+    "checkout-api": ["payments-api", "inventory-api", "pricing-engine", "session-store"],
+    "payments-worker": ["ledger-api", "notifications-api", "feature-flags"],
+    "payments-api": ["ledger-api", "risk-scorer"],
+    "checkout-worker": ["checkout-api", "email-sender"],
+    "search-api": ["search-indexer"],
 }
 
 
 def _build_deploys() -> dict[str, list[dict[str, Any]]]:
-    """Per service, newest first. Incident services get 14 deploys (two pages); the rest three old ones."""
+    """Per service, newest first. Cause services get 14 deploys (two pages); the rest three."""
     history: dict[str, list[dict[str, Any]]] = {}
     for slug, _name, _team, _env, _tier in _SERVICE_SPECS:
-        incident = _INCIDENT_SPECS.get(slug)
-        count = 14 if incident else 3
+        cause = _CAUSES.get(slug)
+        decoy = _DECOY_DEPLOYS.get(slug)
+        count = 14 if cause else 3
         deploys: list[dict[str, Any]] = []
-        for n in range(count, 0, -1):  # n = count is the newest
-            deploy_id = f"dep_{_short_hash(slug, str(n))}"
-            if incident and n == count:
-                when = NOW - timedelta(minutes=incident["minutes_ago"])
-                message = incident["message"]
-            elif incident and n == count - 1:
+        for n in range(count, 0, -1):  # n == count is the newest
+            if cause and n == count:
+                when = NOW - timedelta(minutes=cause["minutes_ago"])
+                message = cause["message"]
+            elif cause and n == count - 1:
                 when = NOW - timedelta(hours=26)
                 message = "Bump dependencies and refresh certificates"
+            elif decoy and n == count:
+                when = NOW - timedelta(hours=decoy[0])
+                message = decoy[1]
             else:
                 when = NOW - timedelta(days=3 + (count - n) * 2, hours=n % 5)
                 message = f"Routine release {n}"
             deploys.append(
                 {
-                    "id": deploy_id,
+                    "id": f"dep_{_short_hash(slug, str(n))}",
                     "service_id": slug,
                     "version": f"v{when.strftime('%Y.%m.%d')}-{n}",
                     "commit": _short_hash(slug, "commit", str(n)) + _short_hash(str(n), slug)[:2],
@@ -224,8 +251,8 @@ def _build_deploys() -> dict[str, list[dict[str, Any]]]:
 
 _DEPLOYS = _build_deploys()
 DEPLOY_BY_ID: dict[str, dict[str, Any]] = {d["id"]: d for deploys in _DEPLOYS.values() for d in deploys}
-GOOD_DEPLOY: dict[str, str] = {slug: _DEPLOYS[slug][1]["id"] for slug in _INCIDENT_SPECS}
-BAD_DEPLOY: dict[str, str] = {slug: _DEPLOYS[slug][0]["id"] for slug in _INCIDENT_SPECS}
+GOOD_DEPLOY: dict[str, str] = {slug: _DEPLOYS[slug][1]["id"] for slug in _CAUSES}
+BAD_DEPLOY: dict[str, str] = {slug: _DEPLOYS[slug][0]["id"] for slug in _CAUSES}
 
 SERVICES: list[dict[str, Any]] = [
     {"id": slug, "name": name, "team_id": team, "env": env, "tier": tier, "current_deploy_id": _DEPLOYS[slug][0]["id"]}
@@ -235,10 +262,10 @@ SERVICE_BY_ID: dict[str, dict[str, Any]] = {s["id"]: s for s in SERVICES}
 
 
 def _build_alerts() -> list[dict[str, Any]]:
-    """40 alerts, newest first: the two firing ones for the incident services and 38 resolved historical ones."""
+    """40 alerts, newest first: the two firing ones on the victims and 38 resolved historical ones."""
     alerts: list[dict[str, Any]] = []
-    for slug, spec in _INCIDENT_SPECS.items():
-        service = SERVICE_BY_ID[slug]
+    for victim, spec in _INCIDENT_SPECS.items():
+        service = SERVICE_BY_ID[victim]
         alert = spec["alert"]
         alerts.append(
             {
@@ -247,9 +274,11 @@ def _build_alerts() -> list[dict[str, Any]]:
                 "title": alert["title"],
                 "service_name": service["name"],
                 "environment": service["env"],
-                "fired_at": _ago(minutes=spec["minutes_ago"] - 6),
+                "fired_at": _iso(NOW - timedelta(minutes=spec["minutes_ago"] - 6)),
                 "labels": {"metric": alert["metric"], "threshold": alert["threshold"], "severity": "high"},
                 "summary": f"{alert['metric']} above {alert['threshold']} for 5 minutes on {service['name']} ({service['env']}).",
+                "runbook_hint": "If a deploy caused this, deploys_rollback_latest undoes it in one call.",
+                "incident_id": None,
             }
         )
     metrics = ["cpu_high", "disk_usage", "http_5xx_rate", "latency_p95", "queue_latency_p95"]
@@ -263,9 +292,10 @@ def _build_alerts() -> list[dict[str, Any]]:
                 "title": f"{metric} on {service['name']} ({service['env']})",
                 "service_name": service["name"],
                 "environment": service["env"],
-                "fired_at": _ago(days=1 + n, hours=n % 7),
+                "fired_at": _iso(NOW - timedelta(days=1 + n, hours=n % 7)),
                 "labels": {"metric": metric, "threshold": "n/a", "severity": "low"},
                 "summary": f"{metric} alert on {service['name']}, resolved.",
+                "incident_id": None,
             }
         )
     alerts.sort(key=lambda a: a["fired_at"], reverse=True)
@@ -274,29 +304,28 @@ def _build_alerts() -> list[dict[str, Any]]:
 
 ALERTS: list[dict[str, Any]] = _build_alerts()
 ALERT_BY_ID: dict[str, dict[str, Any]] = {a["id"]: a for a in ALERTS}
+_ALERT_DEFAULTS = deepcopy(ALERTS)
 
 _RUNBOOKS = [
-    {"title": "Rolling back a deploy", "url": "https://runbooks.example/deploys/rollback", "summary": "Request an approval token with approvals_request(service_id, 'rollback'), then deploys_rollback."},
-    {"title": "Opening an incident", "url": "https://runbooks.example/incidents/open", "summary": "Use severity sev1-sev3 and assign the team's on-call user id."},
-    {"title": "Reading service logs", "url": "https://runbooks.example/logs", "summary": "logs_query accepts windows of up to 60 minutes."},
+    {"title": "Rolling back a deploy", "url": "https://runbooks.example/deploys/rollback", "summary": "Open an incident first, request an approval token with approvals_request(service_id, 'rollback', incident_id), then deploys_rollback."},
+    {"title": "Opening an incident", "url": "https://runbooks.example/incidents/open", "summary": "Severity is sev1, sev2 or sev3; the assignee is a user id (u_...), found through the owning team's on-call."},
+    {"title": "Reading service logs", "url": "https://runbooks.example/logs", "summary": "logs_query accepts windows of up to 60 minutes; alerts on a service are often caused by an upstream dependency."},
 ]
-
-_DEPENDENCIES = {
-    "checkout-api": ["payments-api", "inventory-api", "pricing-engine", "session-store"],
-    "payments-worker": ["ledger-api", "payments-api", "notifications-api"],
-}
 
 STATE: dict[str, Any] = {}
 
 
 def reset() -> None:
-    """Forget every approval, rollback, incident and chat post, and put every service back on its newest deploy."""
+    """Forget every approval, rollback, incident, acknowledgement and chat post; put every service on its newest deploy."""
     STATE.clear()
     STATE.update({"approvals": {}, "rollbacks": [], "incidents": [], "posts": [], "next_incident": 2041, "next_post": 1})
     for slug, deploys in _DEPLOYS.items():
         SERVICE_BY_ID[slug]["current_deploy_id"] = deploys[0]["id"]
         for deploy in deploys:
             deploy["status"] = "live" if deploy is deploys[0] else "superseded"
+    for alert, default in zip(ALERTS, _ALERT_DEFAULTS):
+        alert["status"] = default["status"]
+        alert["incident_id"] = None
 
 
 reset()
@@ -316,7 +345,7 @@ def _page(items: list[dict[str, Any]], page: int, what: str) -> dict[str, Any]:
         "page": page,
         "total_pages": total_pages,
         "total": len(items),
-        "items": deepcopy(items[start : start + PAGE_SIZE]),
+        "items": items[start : start + PAGE_SIZE],
         "next_page": page + 1 if page < total_pages else None,
     }
 
@@ -324,7 +353,7 @@ def _page(items: list[dict[str, Any]], page: int, what: str) -> dict[str, Any]:
 def _service(service_id: str) -> dict[str, Any]:
     service = SERVICE_BY_ID.get(service_id)
     if service is None:
-        raise ToolError(f"unknown service '{service_id}' (services are keyed by slug, e.g. checkout-api; see services_search)")
+        raise ToolError(f"unknown service '{service_id}' (services are keyed by slug, e.g. checkout-api; try services_search)")
     return service
 
 
@@ -333,6 +362,25 @@ def _deploy(deploy_id: str) -> dict[str, Any]:
     if deploy is None:
         raise ToolError(f"unknown deploy '{deploy_id}'")
     return deploy
+
+
+def _view(service: dict[str, Any]) -> dict[str, Any]:
+    """A service record as the API returns it: the current deploy is inlined."""
+    current = _deploy(service["current_deploy_id"])
+    return {
+        "id": service["id"],
+        "name": service["name"],
+        "team_id": service["team_id"],
+        "env": service["env"],
+        "tier": service["tier"],
+        "current_deploy": {
+            "id": current["id"],
+            "version": current["version"],
+            "deployed_at": current["deployed_at"],
+            "message": current["message"],
+            "previous_deploy_id": current["previous_deploy_id"],
+        },
+    }
 
 
 def _parse_ts(value: str, field: str) -> datetime:
@@ -356,10 +404,17 @@ def _require_reason(reason: str | None) -> str | None:
     return reason
 
 
+def _incident(incident_id: str) -> dict[str, Any]:
+    incident = next((i for i in STATE["incidents"] if i["id"] == incident_id), None)
+    if incident is None:
+        raise ToolError(f"unknown incident '{incident_id}'")
+    return incident
+
+
 def alerts_list(status: str = "firing", page: int = 1) -> dict[str, Any]:
-    if status not in ("firing", "resolved", "all"):
-        raise ToolError("status must be one of: firing, resolved, all")
-    items = [a for a in ALERTS if status == "all" or a["status"] == status]
+    if status not in ("firing", "acknowledged", "resolved", "all"):
+        raise ToolError("status must be one of: firing, acknowledged, resolved, all")
+    items = [deepcopy(a) for a in ALERTS if status == "all" or a["status"] == status]
     return _page(items, page, "alerts")
 
 
@@ -370,43 +425,61 @@ def alerts_get(alert_id: str) -> dict[str, Any]:
     return deepcopy(alert)
 
 
+def alerts_ack(alert_id: str, incident_id: str) -> dict[str, Any]:
+    alert = ALERT_BY_ID.get(alert_id)
+    if alert is None:
+        raise ToolError(f"unknown alert '{alert_id}'")
+    _incident(incident_id)
+    if alert["status"] != "firing":
+        raise ToolError(f"alert '{alert_id}' is {alert['status']}, not firing")
+    alert["status"] = "acknowledged"
+    alert["incident_id"] = incident_id
+    return deepcopy(alert)
+
+
 def services_list(page: int = 1) -> dict[str, Any]:
-    return _page(SERVICES, page, "services")
+    return _page([_view(s) for s in SERVICES], page, "services")
 
 
 def services_search(query: str) -> list[dict[str, Any]]:
-    """Matches service ids (slugs) only: 'checkout-api' finds the service, 'Checkout API' does not."""
+    """Matches service ids (slugs) only: 'checkout' finds three services, 'Checkout API' finds none."""
     needle = query.strip().lower()
     if not needle:
         raise ToolError("query must not be empty")
-    return [deepcopy(s) for s in SERVICES if needle in s["id"]]
+    return [_view(s) for s in SERVICES if needle in s["id"]]
 
 
 def services_get(service_id: str) -> dict[str, Any]:
-    return deepcopy(_service(service_id))
+    return _view(_service(service_id))
 
 
-def services_dependencies(service_id: str) -> list[str]:
+def services_dependencies(service_id: str) -> list[dict[str, Any]]:
     _service(service_id)
-    return list(_DEPENDENCIES.get(service_id, []))
+    return [_view(SERVICE_BY_ID[dep]) for dep in _DEPENDENCIES.get(service_id, [])]
 
 
 def deploys_list(service_id: str, page: int = 1) -> dict[str, Any]:
     _service(service_id)
-    return _page(_DEPLOYS[service_id], page, f"deploys of {service_id}")
+    return _page(deepcopy(_DEPLOYS[service_id]), page, f"deploys of {service_id}")
 
 
 def deploys_get(deploy_id: str) -> dict[str, Any]:
     return deepcopy(_deploy(deploy_id))
 
 
-def approvals_request(service_id: str, action: str) -> dict[str, Any]:
+def approvals_request(service_id: str, action: str, incident_id: str | None = None) -> dict[str, Any]:
     _service(service_id)
     if action not in ("rollback", "restart", "scale"):
         raise ToolError("action must be one of: rollback, restart, scale")
+    if action == "rollback":
+        if not incident_id:
+            raise ToolError("rollback approvals must reference an open incident: pass incident_id (open one with incidents_create first)")
+        incident = _incident(incident_id)
+        if incident["status"] not in ("open", "mitigated"):
+            raise ToolError(f"incident '{incident_id}' is {incident['status']}; approvals need an open incident")
     token = f"apr_{_short_hash(service_id, action, str(len(STATE['approvals'])))}"
-    STATE["approvals"][token] = {"service_id": service_id, "action": action, "used": False}
-    return {"token": token, "service_id": service_id, "action": action, "expires_at": _iso(NOW + timedelta(minutes=15))}
+    STATE["approvals"][token] = {"service_id": service_id, "action": action, "incident_id": incident_id, "used": False}
+    return {"token": token, "service_id": service_id, "action": action, "incident_id": incident_id, "expires_at": _iso(NOW + timedelta(minutes=15))}
 
 
 def _apply_rollback(service: dict[str, Any], target: dict[str, Any], reason: str | None, how: str) -> dict[str, Any]:
@@ -430,7 +503,7 @@ def _apply_rollback(service: dict[str, Any], target: dict[str, Any], reason: str
 def deploys_rollback(service_id: str, to_deploy_id: str, confirmation_token: str | None = None, reason: str | None = None) -> dict[str, Any]:
     service = _service(service_id)
     if not confirmation_token:
-        raise ToolError("confirmation_token required: call approvals_request(service_id, 'rollback') first")
+        raise ToolError("confirmation_token required: rollbacks need an approval token from approvals_request(service_id, 'rollback', incident_id)")
     approval = STATE["approvals"].get(confirmation_token)
     if approval is None or approval["service_id"] != service_id or approval["action"] != "rollback" or approval["used"]:
         raise ToolError("invalid or expired confirmation_token for this service: request a new one with approvals_request")
@@ -445,7 +518,7 @@ def deploys_rollback(service_id: str, to_deploy_id: str, confirmation_token: str
 
 
 def deploys_rollback_latest(service_id: str, reason: str | None = None) -> dict[str, Any]:
-    """One call: roll the service back to the deploy before the current one. May be down (the outage switch)."""
+    """One call: roll the service back to the deploy before the current one, approval included. May be down."""
     if switch("rollback_outage"):
         raise ToolError("503 Service Unavailable")
     service = _service(service_id)
@@ -466,15 +539,19 @@ def logs_query(service_id: str, since: str, until: str, limit: int = 50) -> list
         raise ToolError("window too large: at most 60 minutes between since and until")
     if not isinstance(limit, int) or not 1 <= limit <= 200:
         raise ToolError("limit must be an integer between 1 and 200")
-    incident = _INCIDENT_SPECS.get(service_id)
-    bad_at = NOW - timedelta(minutes=incident["minutes_ago"]) if incident else None
+    spec = _INCIDENT_SPECS.get(service_id) or _CAUSES.get(service_id)
+    error = None
+    bad_at = None
+    if spec:
+        bad_at = NOW - timedelta(minutes=spec["minutes_ago"])
+        error = spec["victim_error"] if service_id in _INCIDENT_SPECS else spec["cause_error"]
     entries: list[dict[str, Any]] = []
     moment = start.replace(second=0, microsecond=0)
     while moment <= end and moment <= NOW:
         if moment >= start:
             entries.append({"ts": _iso(moment), "level": "INFO", "message": f"{service_id}: handled 1,2{moment.minute:02d} requests"})
             if bad_at is not None and moment >= bad_at and moment.minute % 2 == 0:
-                entries.append({"ts": _iso(moment), "level": "ERROR", "message": incident["error"]})
+                entries.append({"ts": _iso(moment), "level": "ERROR", "message": error})
         moment += timedelta(minutes=1)
     return entries[-limit:]
 
@@ -483,12 +560,12 @@ def metrics_query(service_id: str, metric: str, window: str) -> dict[str, Any]:
     _service(service_id)
     if metric not in ("error_rate", "latency_p95", "rps", "queue_latency_p95"):
         raise ToolError("metric must be one of: error_rate, latency_p95, rps, queue_latency_p95")
-    match = re.fullmatch(r"(\d+)([mh])", window.strip())
+    match = re.fullmatch(r"(\d+)([mh])", str(window).strip())
     if not match:
         raise ToolError("window must look like 15m or 2h")
     minutes = int(match.group(1)) * (60 if match.group(2) == "h" else 1)
-    incident = _INCIDENT_SPECS.get(service_id)
-    bad_at = NOW - timedelta(minutes=incident["minutes_ago"]) if incident else None
+    spec = _INCIDENT_SPECS.get(service_id) or _CAUSES.get(service_id)
+    bad_at = NOW - timedelta(minutes=spec["minutes_ago"]) if spec else None
     baseline = {"error_rate": 0.4, "latency_p95": 180.0, "rps": 240.0, "queue_latency_p95": 2.5}[metric]
     spike = {"error_rate": 12.5, "latency_p95": 2400.0, "rps": 231.0, "queue_latency_p95": 48.0}[metric]
     points = []
@@ -515,7 +592,7 @@ def users_get(user_id: str) -> dict[str, Any]:
 
 def oncall_schedule(team_id: str, day: str) -> list[dict[str, Any]]:
     team = teams_get(team_id)
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(day)):
         raise ToolError("day must be YYYY-MM-DD")
     members = [u for u in USERS.values() if u["team_id"] == team_id]
     primary = team["oncall_user_id"]
@@ -531,11 +608,11 @@ def incidents_create(title: str, service_id: str, severity: str, assignee_id: st
     if not isinstance(title, str) or not title.strip():
         raise ToolError("title must not be empty")
     if severity not in ("sev1", "sev2", "sev3"):
-        raise ToolError("severity must be one of: sev1, sev2, sev3")
+        raise ToolError(f"severity must be one of: sev1, sev2, sev3 (got {severity!r})")
     if not isinstance(assignee_id, str) or not re.fullmatch(r"u_\d+", assignee_id):
         raise ToolError(
             f"assignee_id must be a user id such as u_1032 (got {assignee_id!r}); "
-            "find it with teams_get(service.team_id).oncall_user_id"
+            "the owning team's on-call user id is teams_get(service.team_id).oncall_user_id"
         )
     if assignee_id not in USERS:
         raise ToolError(f"unknown user '{assignee_id}'")
@@ -555,9 +632,7 @@ def incidents_create(title: str, service_id: str, severity: str, assignee_id: st
 
 
 def incidents_update(incident_id: str, status: str, note: str = "") -> dict[str, Any]:
-    incident = next((i for i in STATE["incidents"] if i["id"] == incident_id), None)
-    if incident is None:
-        raise ToolError(f"unknown incident '{incident_id}'")
+    incident = _incident(incident_id)
     if status not in ("open", "mitigated", "resolved"):
         raise ToolError("status must be one of: open, mitigated, resolved")
     incident["status"] = status
@@ -578,7 +653,7 @@ def chat_post(channel: str, message: str) -> dict[str, Any]:
 
 
 def runbooks_search(query: str) -> list[dict[str, Any]]:
-    needle = query.lower()
+    needle = str(query).lower()
     hits = [r for r in _RUNBOOKS if any(word in f"{r['title']} {r['summary']}".lower() for word in needle.split())]
     return deepcopy(hits or _RUNBOOKS)
 
@@ -586,6 +661,7 @@ def runbooks_search(query: str) -> list[dict[str, Any]]:
 _HANDLERS = {
     "alerts_list": alerts_list,
     "alerts_get": alerts_get,
+    "alerts_ack": alerts_ack,
     "services_list": services_list,
     "services_search": services_search,
     "services_get": services_get,
@@ -629,132 +705,45 @@ def _obj(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required}
 
 
+def _s(description: str | None = None) -> dict[str, Any]:
+    return {"type": "string", "description": description} if description else {"type": "string"}
+
+
 def tool_definitions(*, reason: bool) -> list[dict[str, Any]]:
-    """Anthropic-format definitions; ``reason=True`` is the deploy API after its schema change."""
-    page = {"type": "integer", "description": "1-based page number; responses carry next_page and total_pages"}
-    rollback_props: dict[str, Any] = {
-        "service_id": {"type": "string"},
-        "to_deploy_id": {"type": "string"},
-        "confirmation_token": {"type": "string", "description": "from approvals_request(service_id, 'rollback')"},
-    }
-    rollback_required = ["service_id", "to_deploy_id", "confirmation_token"]
-    latest_props: dict[str, Any] = {"service_id": {"type": "string"}}
+    """Anthropic-format definitions. They say what each tool does, not its rules; ``reason=True`` is the deploy API
+    after its schema change."""
+    page = {"type": "integer", "description": "1-based page number"}
+    rollback_props: dict[str, Any] = {"service_id": _s(), "to_deploy_id": _s(), "confirmation_token": _s()}
+    rollback_required = ["service_id", "to_deploy_id"]
+    latest_props: dict[str, Any] = {"service_id": _s()}
     latest_required = ["service_id"]
     if reason:
-        rollback_props["reason"] = {"type": "string", "description": "why the rollback is needed"}
+        rollback_props["reason"] = _s("why the rollback is needed")
         rollback_required.append("reason")
-        latest_props["reason"] = {"type": "string", "description": "why the rollback is needed"}
+        latest_props["reason"] = _s("why the rollback is needed")
         latest_required.append("reason")
     return [
-        {
-            "name": "alerts_list",
-            "description": "List alerts by status (firing, resolved or all), 10 per page.",
-            "input_schema": _obj({"status": {"type": "string", "enum": ["firing", "resolved", "all"]}, "page": page}, []),
-        },
-        {
-            "name": "alerts_get",
-            "description": "One alert in full: title, the service's display name, environment, labels and summary.",
-            "input_schema": _obj({"alert_id": {"type": "string"}}, ["alert_id"]),
-        },
-        {
-            "name": "services_list",
-            "description": "List services, 10 per page, with id (slug), display name, team_id, env, tier and current_deploy_id.",
-            "input_schema": _obj({"page": page}, []),
-        },
-        {
-            "name": "services_search",
-            "description": "Find services whose id (slug) contains the query, e.g. 'checkout'.",
-            "input_schema": _obj({"query": {"type": "string"}}, ["query"]),
-        },
-        {
-            "name": "services_get",
-            "description": "One service by id: team_id, env, tier and current_deploy_id.",
-            "input_schema": _obj({"service_id": {"type": "string"}}, ["service_id"]),
-        },
-        {
-            "name": "services_dependencies",
-            "description": "The upstream service ids a service depends on.",
-            "input_schema": _obj({"service_id": {"type": "string"}}, ["service_id"]),
-        },
-        {
-            "name": "deploys_list",
-            "description": "Deploy history of a service, newest first, 10 per page.",
-            "input_schema": _obj({"service_id": {"type": "string"}, "page": page}, ["service_id"]),
-        },
-        {
-            "name": "deploys_get",
-            "description": "One deploy: version, commit, message, deployed_at, status and previous_deploy_id.",
-            "input_schema": _obj({"deploy_id": {"type": "string"}}, ["deploy_id"]),
-        },
-        {
-            "name": "deploys_rollback",
-            "description": "Roll a service back to an earlier deploy. Needs a confirmation token from approvals_request.",
-            "input_schema": _obj(rollback_props, rollback_required),
-        },
-        {
-            "name": "deploys_rollback_latest",
-            "description": "The fastest way to undo a bad deploy: one call rolls the service back to the deploy before the current one, approval included.",
-            "input_schema": _obj(latest_props, latest_required),
-        },
-        {
-            "name": "approvals_request",
-            "description": "Request an approval token for an action on a service (rollback, restart or scale).",
-            "input_schema": _obj({"service_id": {"type": "string"}, "action": {"type": "string", "enum": ["rollback", "restart", "scale"]}}, ["service_id", "action"]),
-        },
-        {
-            "name": "logs_query",
-            "description": "Log entries of a service between two ISO 8601 timestamps (at most 60 minutes apart), oldest first.",
-            "input_schema": _obj(
-                {"service_id": {"type": "string"}, "since": {"type": "string"}, "until": {"type": "string"}, "limit": {"type": "integer"}},
-                ["service_id", "since", "until"],
-            ),
-        },
-        {
-            "name": "metrics_query",
-            "description": "Six data points of a metric over a window such as 15m or 2h.",
-            "input_schema": _obj(
-                {"service_id": {"type": "string"}, "metric": {"type": "string", "enum": ["error_rate", "latency_p95", "rps", "queue_latency_p95"]}, "window": {"type": "string"}},
-                ["service_id", "metric", "window"],
-            ),
-        },
-        {
-            "name": "teams_get",
-            "description": "A team: name, oncall_user_id and chat channel.",
-            "input_schema": _obj({"team_id": {"type": "string"}}, ["team_id"]),
-        },
-        {
-            "name": "users_get",
-            "description": "A user by id (u_1032): name, handle and team_id.",
-            "input_schema": _obj({"user_id": {"type": "string"}}, ["user_id"]),
-        },
-        {
-            "name": "oncall_schedule",
-            "description": "Who is on call for a team on a day (YYYY-MM-DD).",
-            "input_schema": _obj({"team_id": {"type": "string"}, "day": {"type": "string"}}, ["team_id", "day"]),
-        },
-        {
-            "name": "incidents_create",
-            "description": "Open an incident for a service. severity is sev1, sev2 or sev3; assignee_id is a user id.",
-            "input_schema": _obj(
-                {"title": {"type": "string"}, "service_id": {"type": "string"}, "severity": {"type": "string", "enum": ["sev1", "sev2", "sev3"]}, "assignee_id": {"type": "string"}},
-                ["title", "service_id", "severity", "assignee_id"],
-            ),
-        },
-        {
-            "name": "incidents_update",
-            "description": "Change an incident's status (open, mitigated, resolved) and add a note.",
-            "input_schema": _obj({"incident_id": {"type": "string"}, "status": {"type": "string", "enum": ["open", "mitigated", "resolved"]}, "note": {"type": "string"}}, ["incident_id", "status"]),
-        },
-        {
-            "name": "chat_post",
-            "description": "Post a message to a channel such as #incidents.",
-            "input_schema": _obj({"channel": {"type": "string"}, "message": {"type": "string"}}, ["channel", "message"]),
-        },
-        {
-            "name": "runbooks_search",
-            "description": "Search the runbooks by keyword.",
-            "input_schema": _obj({"query": {"type": "string"}}, ["query"]),
-        },
+        {"name": "alerts_list", "description": "List alerts by status, 10 per page.", "input_schema": _obj({"status": _s("firing, acknowledged, resolved or all"), "page": page}, [])},
+        {"name": "alerts_get", "description": "One alert by id.", "input_schema": _obj({"alert_id": _s()}, ["alert_id"])},
+        {"name": "alerts_ack", "description": "Acknowledge a firing alert against an incident.", "input_schema": _obj({"alert_id": _s(), "incident_id": _s()}, ["alert_id", "incident_id"])},
+        {"name": "services_list", "description": "List services, 10 per page.", "input_schema": _obj({"page": page}, [])},
+        {"name": "services_search", "description": "Search services.", "input_schema": _obj({"query": _s()}, ["query"])},
+        {"name": "services_get", "description": "One service by id.", "input_schema": _obj({"service_id": _s()}, ["service_id"])},
+        {"name": "services_dependencies", "description": "The services a service depends on.", "input_schema": _obj({"service_id": _s()}, ["service_id"])},
+        {"name": "deploys_list", "description": "Deploy history of a service, newest first, 10 per page.", "input_schema": _obj({"service_id": _s(), "page": page}, ["service_id"])},
+        {"name": "deploys_get", "description": "One deploy by id.", "input_schema": _obj({"deploy_id": _s()}, ["deploy_id"])},
+        {"name": "deploys_rollback", "description": "Roll a service back to a deploy.", "input_schema": _obj(rollback_props, rollback_required)},
+        {"name": "deploys_rollback_latest", "description": "The fastest way to undo a bad deploy: one call rolls the service back to the deploy before the current one, approval included.", "input_schema": _obj(latest_props, latest_required)},
+        {"name": "approvals_request", "description": "Request approval for an action on a service.", "input_schema": _obj({"service_id": _s(), "action": _s("rollback, restart or scale"), "incident_id": _s()}, ["service_id", "action"])},
+        {"name": "logs_query", "description": "Log entries of a service between two timestamps.", "input_schema": _obj({"service_id": _s(), "since": _s(), "until": _s(), "limit": {"type": "integer"}}, ["service_id", "since", "until"])},
+        {"name": "metrics_query", "description": "Query a metric of a service over a window.", "input_schema": _obj({"service_id": _s(), "metric": _s(), "window": _s()}, ["service_id", "metric", "window"])},
+        {"name": "teams_get", "description": "One team by id.", "input_schema": _obj({"team_id": _s()}, ["team_id"])},
+        {"name": "users_get", "description": "One user by id.", "input_schema": _obj({"user_id": _s()}, ["user_id"])},
+        {"name": "oncall_schedule", "description": "The on-call rotation of a team for a day.", "input_schema": _obj({"team_id": _s(), "day": _s("YYYY-MM-DD")}, ["team_id", "day"])},
+        {"name": "incidents_create", "description": "Open an incident.", "input_schema": _obj({"title": _s(), "service_id": _s(), "severity": _s(), "assignee_id": _s()}, ["title", "service_id", "severity", "assignee_id"])},
+        {"name": "incidents_update", "description": "Update an incident's status and add a note.", "input_schema": _obj({"incident_id": _s(), "status": _s("open, mitigated or resolved"), "note": _s()}, ["incident_id", "status"])},
+        {"name": "chat_post", "description": "Post a message to a chat channel.", "input_schema": _obj({"channel": _s(), "message": _s()}, ["channel", "message"])},
+        {"name": "runbooks_search", "description": "Search the runbooks.", "input_schema": _obj({"query": _s()}, ["query"])},
     ]
 
 
@@ -771,8 +760,9 @@ TOOLS: list[dict[str, Any]] = current_tools()
 
 def task_for(alert_id: str) -> str:
     return (
-        f"Alert {alert_id} fired. Find the cause, roll back the bad deploy if a deploy caused it, open an incident "
-        "assigned to the on-call engineer, and post a summary in #incidents."
+        f"Alert {alert_id} fired. Find the cause, roll back the deploy that caused it, open an incident for it assigned "
+        "to the on-call engineer of the team that owns the rolled-back service, acknowledge the alert, and post a "
+        "summary in #incidents."
     )
 
 
@@ -782,18 +772,25 @@ def alert_in_task(task: str) -> dict[str, Any] | None:
 
 
 def task_succeeded(task: str) -> bool:
-    """The developer's own success check: the alert's service is back on its good deploy, an incident for it is
-    assigned to the team's on-call engineer, and #incidents has a post naming the service."""
+    """The developer's own success check: the cause service is back on its good deploy, an incident for the cause
+    (or the victim) is assigned to the cause team's on-call engineer, the alert is acknowledged, and #incidents has
+    a post naming the cause service."""
     alert = alert_in_task(task)
     if alert is None:
         return False
-    service = next((s for s in SERVICES if s["name"] == alert["service_name"] and s["env"] == alert["environment"]), None)
-    if service is None or service["id"] not in GOOD_DEPLOY:
+    victim = next((s for s in SERVICES if s["name"] == alert["service_name"] and s["env"] == alert["environment"]), None)
+    if victim is None or victim["id"] not in CAUSE_OF:
         return False
-    if service["current_deploy_id"] != GOOD_DEPLOY[service["id"]]:
+    cause = SERVICE_BY_ID[CAUSE_OF[victim["id"]]]
+    if cause["current_deploy_id"] != GOOD_DEPLOY[cause["id"]]:
         return False
-    oncall = TEAMS[service["team_id"]]["oncall_user_id"]
-    if not any(i["service_id"] == service["id"] and i["assignee_id"] == oncall and i["status"] in ("open", "mitigated") for i in STATE["incidents"]):
+    oncall = TEAMS[cause["team_id"]]["oncall_user_id"]
+    if not any(
+        i["service_id"] in (cause["id"], victim["id"]) and i["assignee_id"] == oncall and i["status"] in ("open", "mitigated")
+        for i in STATE["incidents"]
+    ):
         return False
-    needles = (service["id"].lower(), service["name"].lower())
+    if alert["status"] != "acknowledged":
+        return False
+    needles = (cause["id"].lower(), cause["name"].lower())
     return any(p["channel"] == "#incidents" and any(n in p["message"].lower() for n in needles) for p in STATE["posts"])
