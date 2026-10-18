@@ -58,6 +58,7 @@ def verify(
     *,
     executor: Executor | None = None,
     allow_live: bool = False,
+    full_live: bool = False,
     rebuild_reason: str | None = None,
     replaces: VersionRecord | None = None,
     health_probe: HealthProbe | None = None,
@@ -65,8 +66,10 @@ def verify(
     """Run the three checks on a stored version.
 
     ``allow_live`` lets the replay check fall back to ``executor`` for calls no fixture covers (live
-    verification: real side effects). ``replaces`` is the version a rebuild supersedes; with
-    ``rebuild_reason == "avoided_tool_recovered"`` the new version must beat its measured call count.
+    verification: real side effects). ``full_live`` additionally ignores the stored fixtures so every
+    call runs live and the fixtures are replaced by the fresh responses (``verify --live``).
+    ``replaces`` is the version a rebuild supersedes; with ``rebuild_reason == "avoided_tool_recovered"``
+    the new version must beat its measured call count.
     """
     name, number = version.tool_name, version.version
     report = VerifyReport(name, number, passed=False, baseline_calls=version.baseline_calls)
@@ -98,10 +101,11 @@ def verify(
     except ToolLoadError as exc:
         return _fail(registry, version, report, CheckName.REPLAY, f"importing the module failed: {exc}")
     live_ok = allow_live and executor is not None
+    full_live = full_live and live_ok
     ctx = RunContext(
         mode="replay",
         tools=tools,
-        fixtures=registry.list_fixtures(name, number),
+        fixtures=[] if full_live else registry.list_fixtures(name, number),
         allow_live=live_ok,
         executor=executor if live_ok else None,
     )
@@ -128,7 +132,9 @@ def verify(
             message = failure.message
         return _fail(registry, version, report, CheckName.REPLAY, message, **extra)
     measured = outcome.measured_calls
-    if outcome.new_fixtures:
+    if full_live:
+        registry.replace_fixtures(name, number, outcome.new_fixtures)
+    elif outcome.new_fixtures:
         registry.add_fixtures(name, number, outcome.new_fixtures)
     registry.set_measured_calls(name, number, measured)
     report.measured_calls = measured

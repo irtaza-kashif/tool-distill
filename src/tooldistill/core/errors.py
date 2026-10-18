@@ -70,3 +70,7 @@ class ReplayMismatchError(ToolDistillError):
         self.nearest_input_json = nearest_input_json
         self.nearest_seq = nearest_seq
         self.tool_has_fixtures = tool_has_fixtures
+
+
+class LifecycleError(ToolDistillError):
+    """A lifecycle operation cannot be carried out as requested (nothing to promote, live verification off, ...)."""
